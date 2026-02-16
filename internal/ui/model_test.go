@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -39,5 +40,22 @@ func TestViewHandlesOutOfRangeActiveTab(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "[ PR Queue ]") {
 		t.Fatalf("expected fallback to first tab: %q", view)
+	}
+}
+
+func TestRunInteractiveSwitchesTabsAndQuits(t *testing.T) {
+	input := strings.NewReader("2\nq\n")
+	var output bytes.Buffer
+
+	if err := RunInteractive(NewDummyModel(), input, &output); err != nil {
+		t.Fatalf("RunInteractive failed: %v", err)
+	}
+
+	text := output.String()
+	if !strings.Contains(text, "[ Open Sessions ]") {
+		t.Fatalf("expected switched tab in output: %q", text)
+	}
+	if !strings.Contains(text, "command>") {
+		t.Fatalf("expected prompt in output: %q", text)
 	}
 }

@@ -78,7 +78,7 @@ func (m Model) SelectTab(index int) Model {
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString("ttt UI (preview)\n")
-	b.WriteString("keys: tab/shift+tab move | 1/2/3 jump | q quit\n\n")
+	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, q\n\n")
 	if len(m.tabs) == 0 {
 		return b.String()
 	}

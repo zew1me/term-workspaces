@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +67,11 @@ func runUI(args []string) error {
 		fmt.Println(model.View())
 		return nil
 	}
-	return fmt.Errorf("interactive ui mode is not wired yet; run `ttt ui --preview`")
+	return runUIInteractive(model, os.Stdin, os.Stdout)
+}
+
+var runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer) error {
+	return ui.RunInteractive(model, in, out)
 }
 
 func buildUIModelFromStore(ctx context.Context, store *tasks.SQLiteStore) (ui.Model, error) {

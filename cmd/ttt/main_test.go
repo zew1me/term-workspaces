@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"term-workspaces/internal/ui"
 	"term-workspaces/internal/wezterm"
 	"testing"
 )
@@ -100,6 +101,28 @@ func TestRunUIPreviewUsesRealStoreData(t *testing.T) {
 	}
 	if !strings.Contains(out, "session=open(pane=1200)") {
 		t.Fatalf("expected open session status in preview output: %q", out)
+	}
+}
+
+func TestRunUIInteractiveMode(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	called := false
+
+	original := runUIInteractive
+	runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer) error {
+		called = true
+		if !strings.Contains(model.View(), "PR Queue") {
+			t.Fatalf("expected model content in interactive run")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runUIInteractive = original })
+
+	if err := run([]string{"ui", "--db", dbPath}); err != nil {
+		t.Fatalf("ui interactive run failed: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected interactive runner to be called")
 	}
 }
 
