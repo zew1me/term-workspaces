@@ -84,3 +84,43 @@ func TestSQLiteStoreRejectsAliasRebind(t *testing.T) {
 		t.Fatalf("expected ErrAliasAlreadyBound, got %v", err)
 	}
 }
+
+func TestSQLiteStoreListTaskAliasRows(t *testing.T) {
+	t.Parallel()
+
+	h := newSQLiteTestHarness(t)
+
+	if _, _, err := h.Service.GetOrCreatePrePRTask(h.Ctx, "owner/repo", "feature/list"); err != nil {
+		t.Fatalf("GetOrCreatePrePRTask: %v", err)
+	}
+	if _, _, err := h.Service.LinkPRToPrePR(h.Ctx, "owner/repo", "feature/list", 55); err != nil {
+		t.Fatalf("LinkPRToPrePR: %v", err)
+	}
+
+	rows, err := h.Store.ListTaskAliasRows(h.Ctx)
+	if err != nil {
+		t.Fatalf("ListTaskAliasRows: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Fatalf("expected at least two alias rows, got %d", len(rows))
+	}
+
+	var hasPrePR, hasPR bool
+	for _, row := range rows {
+		switch row.AliasType {
+		case AliasTypePrePR:
+			hasPrePR = true
+		case AliasTypePR:
+			if row.PRNumber == 55 {
+				hasPR = true
+			}
+		}
+	}
+
+	if !hasPrePR {
+		t.Fatalf("expected at least one prepr row")
+	}
+	if !hasPR {
+		t.Fatalf("expected PR row for PR 55")
+	}
+}

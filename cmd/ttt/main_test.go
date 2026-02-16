@@ -235,6 +235,49 @@ func TestRunTaskOpenNoteDryRunUsesEditorEnv(t *testing.T) {
 	}
 }
 
+func TestRunTaskListIncludesCreatedAliases(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "ensure-prepr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/list-test",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("ensure-prepr run failed: %v", err)
+	}
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "link-pr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/list-test",
+			"--pr", "987",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("link-pr run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "list", "--db", dbPath})
+	})
+	if err != nil {
+		t.Fatalf("task list run failed: %v", err)
+	}
+	if !strings.Contains(out, "task_id\talias_type\talias_value\trepo\tbranch\tpr") {
+		t.Fatalf("expected list header in output: %q", out)
+	}
+	if !strings.Contains(out, "prepr:zew1me/term-workspaces:feature/list-test") {
+		t.Fatalf("expected prepr alias in output: %q", out)
+	}
+	if !strings.Contains(out, "pr:zew1me/term-workspaces#987") {
+		t.Fatalf("expected pr alias in output: %q", out)
+	}
+}
+
 func captureStdout(fn func() error) (string, error) {
 	originalStdout := os.Stdout
 	reader, writer, err := os.Pipe()
