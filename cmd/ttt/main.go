@@ -45,16 +45,94 @@ func runUI(args []string) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	preview := fs.Bool("preview", false, "Print initial UI view and exit")
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	model := ui.NewDummyModel()
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	model, err := buildUIModelFromStore(context.Background(), store)
+	if err != nil {
+		return err
+	}
 	if *preview {
 		fmt.Println(model.View())
 		return nil
 	}
 	return fmt.Errorf("interactive ui mode is not wired yet; run `ttt ui --preview`")
+}
+
+func buildUIModelFromStore(ctx context.Context, store *tasks.SQLiteStore) (ui.Model, error) {
+	taskRows, err := store.ListTasks(ctx)
+	if err != nil {
+		return ui.Model{}, fmt.Errorf("list ui tasks: %w", err)
+	}
+	aliases, err := store.ListTaskAliasRows(ctx)
+	if err != nil {
+		return ui.Model{}, fmt.Errorf("list ui aliases: %w", err)
+	}
+	sessions, err := store.ListSessions(ctx)
+	if err != nil {
+		return ui.Model{}, fmt.Errorf("list ui sessions: %w", err)
+	}
+
+	merged := mergeDashboardTaskRows(taskRows, aliases, sessions)
+	queueRows := make([]string, 0, len(merged))
+	for _, entry := range merged {
+		queueRows = append(queueRows, fmt.Sprintf("%s task=%s session=%s",
+			primaryAliasDisplay(entry.Aliases),
+			entry.Task.ID,
+			sessionDisplay(entry.Session),
+		))
+	}
+
+	openSessions := filterOpenSessions(sessions)
+	openRows := make([]string, 0, len(openSessions))
+	for _, session := range openSessions {
+		openRows = append(openRows, fmt.Sprintf("task=%s pane=%d workspace=%s cwd=%s",
+			session.TaskID,
+			session.PaneID,
+			session.Workspace,
+			session.Cwd,
+		))
+	}
+
+	eventRows := []string{
+		fmt.Sprintf("[ok] loaded tasks=%d aliases=%d sessions=%d open=%d", len(taskRows), len(aliases), len(sessions), len(openSessions)),
+	}
+
+	return ui.NewModelFromSections(ui.Sections{
+		PRQueue:      queueRows,
+		OpenSessions: openRows,
+		Events:       eventRows,
+	}), nil
+}
+
+func primaryAliasDisplay(aliases []tasks.TaskAliasRow) string {
+	if len(aliases) == 0 {
+		return "alias=<none>"
+	}
+	// Prefer PR aliases so queue items surface canonical review identity first.
+	for _, alias := range aliases {
+		if alias.AliasType == tasks.AliasTypePR {
+			return alias.AliasValue
+		}
+	}
+	return aliases[0].AliasValue
+}
+
+func sessionDisplay(session *tasks.TaskSession) string {
+	if session == nil {
+		return "none"
+	}
+	return fmt.Sprintf("%s(pane=%d)", session.Status, session.PaneID)
 }
 
 func runTask(args []string) error {
@@ -820,7 +898,7 @@ func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branc
 
 func printUsage() error {
 	fmt.Println("ttt usage:")
-	fmt.Println("  ttt ui [--preview]")
+	fmt.Println("  ttt ui [--preview] [--db path]")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task close-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path]")
 	fmt.Println("  ttt task dashboard [--db path] [--json]")
