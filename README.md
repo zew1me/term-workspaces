@@ -1,7 +1,7 @@
 # term-workspaces
 
 ## Task CLI
-`ttt` currently supports task identity linking, note scaffolding, and task listing backed by SQLite.
+`ttt` currently supports task identity linking, note workflows, session orchestration, and dashboard views backed by SQLite.
 
 ### Common Commands
 ```bash
@@ -23,6 +23,19 @@ go run ./cmd/ttt task list
 # grouped list views for top-level summaries
 go run ./cmd/ttt task list --group-by repo
 go run ./cmd/ttt task list --group-by alias_type
+
+# open or re-activate a task session (spawns WezTerm pane if needed)
+go run ./cmd/ttt task open-session --repo owner/repo --branch feature/name
+
+# close a task session and clear stale pane binding
+go run ./cmd/ttt task close-session --repo owner/repo --branch feature/name
+
+# list sessions and optionally reconcile status from live WezTerm panes
+go run ./cmd/ttt task sessions
+go run ./cmd/ttt task sessions --reconcile --json
+
+# dashboard payload (groups + aliases + sessions + merged task view)
+go run ./cmd/ttt task dashboard --json
 ```
 
 ## Go Hook Tooling
@@ -41,7 +54,7 @@ prek run --all-files --stage pre-push
 ```
 
 ### Tooling Included
-- formatting: `go fmt`, `gofumpt -w .`
+- formatting: `go fmt`, `golangci-lint fmt ./...`
 - linting: `golangci-lint` (includes `govet`, `staticcheck`, `gosec`, `gofumpt` checks)
 - tests: `go test`, `go test --race`
 - build: `go build`

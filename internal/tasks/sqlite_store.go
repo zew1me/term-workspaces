@@ -206,6 +206,22 @@ func (s *SQLiteStore) ListTaskAliasRows(ctx context.Context) ([]TaskAliasRow, er
 	return result, nil
 }
 
+func (s *SQLiteStore) ListTasks(ctx context.Context) ([]Task, error) {
+	models := make([]sqliteTaskModel, 0)
+	if err := s.db.WithContext(ctx).
+		Order("updated_at DESC").
+		Order("task_id ASC").
+		Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+
+	result := make([]Task, 0, len(models))
+	for _, model := range models {
+		result = append(result, fromTaskModel(model))
+	}
+	return result, nil
+}
+
 func (s *SQLiteStore) ListTaskAliasGroupCounts(ctx context.Context, groupBy string) ([]GroupCount, error) {
 	column, err := taskAliasGroupByColumn(groupBy)
 	if err != nil {
