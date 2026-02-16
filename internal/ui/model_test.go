@@ -22,3 +22,22 @@ func TestDummyModelTabSwitch(t *testing.T) {
 		t.Fatalf("expected active tab index 1, got %d", updated.activeTab)
 	}
 }
+
+func TestZeroValueModelDoesNotPanic(t *testing.T) {
+	var model Model
+	_ = model.NextTab()
+	_ = model.PrevTab()
+	view := model.View()
+	if !strings.Contains(view, "ttt UI") {
+		t.Fatalf("expected header in zero-value view: %q", view)
+	}
+}
+
+func TestViewHandlesOutOfRangeActiveTab(t *testing.T) {
+	model := NewDummyModel()
+	model.activeTab = 999
+	view := model.View()
+	if !strings.Contains(view, "[ PR Queue ]") {
+		t.Fatalf("expected fallback to first tab: %q", view)
+	}
+}
