@@ -340,15 +340,19 @@ func TestRunTaskListJSON(t *testing.T) {
 		t.Fatalf("task list --json run failed: %v", err)
 	}
 
-	var rows []map[string]any
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+	type taskRow struct {
+		TaskID     string `json:"task_id"`
+		AliasValue string `json:"alias_value"`
+	}
+	var rowsTyped []taskRow
+	if err := json.Unmarshal([]byte(out), &rowsTyped); err != nil {
 		t.Fatalf("json.Unmarshal failed: %v (output=%q)", err, out)
 	}
-	if len(rows) == 0 {
+	if len(rowsTyped) == 0 {
 		t.Fatalf("expected at least one row in json output")
 	}
-	if rows[0]["alias_value"] == "" {
-		t.Fatalf("expected alias_value in first row: %#v", rows[0])
+	if rowsTyped[0].AliasValue == "" || rowsTyped[0].TaskID == "" {
+		t.Fatalf("expected alias_value/task_id in first row: %#v", rowsTyped[0])
 	}
 }
 
@@ -384,12 +388,19 @@ func TestRunTaskListGroupByAliasTypeJSON(t *testing.T) {
 		t.Fatalf("task list grouped json run failed: %v", err)
 	}
 
-	var groups []map[string]any
+	type groupRow struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	}
+	var groups []groupRow
 	if err := json.Unmarshal([]byte(out), &groups); err != nil {
 		t.Fatalf("json.Unmarshal failed: %v (output=%q)", err, out)
 	}
 	if len(groups) == 0 {
 		t.Fatalf("expected grouped json rows")
+	}
+	if groups[0].Key == "" || groups[0].Count <= 0 {
+		t.Fatalf("expected key/count in grouped row: %#v", groups[0])
 	}
 }
 
