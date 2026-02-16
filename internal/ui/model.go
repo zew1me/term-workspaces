@@ -55,27 +55,40 @@ func (m Model) PrevTab() Model {
 	return m
 }
 
-}
-
-func (m Model) SelectTab(index int) Model {
-	if index >= 0 && index < len(m.tabs) {
-		m.activeTab = index
-	}
-	return m
-}
 
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString("ttt UI (scaffold)\n")
 	b.WriteString("keys: tab/shift+tab move | 1/2/3 jump | q quit\n\n")
+	
+	if len(m.tabs) == 0 {
+		return b.String()
+	}
+	
+	// Ensure activeTab is within bounds
+	safeActiveTab := m.activeTab
+	if safeActiveTab < 0 || safeActiveTab >= len(m.tabs) {
+		safeActiveTab = 0
+	}
+	
 	for i, tab := range m.tabs {
-		if i == m.activeTab {
+		if i == safeActiveTab {
 			b.WriteString(fmt.Sprintf("[ %s ] ", tab))
 		} else {
 			b.WriteString(fmt.Sprintf("  %s   ", tab))
 		}
 	}
 	b.WriteString("\n\n")
+
+	active := m.tabs[safeActiveTab]
+	for _, row := range m.sections[active] {
+		b.WriteString("- ")
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 
 	active := m.tabs[m.activeTab]
 	for _, row := range m.sections[active] {
