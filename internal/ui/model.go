@@ -38,14 +38,23 @@ func NewDummyModel() Model {
 	}
 }
 
+
 func (m Model) NextTab() Model {
+	if len(m.tabs) == 0 {
+		return m
+	}
 	m.activeTab = (m.activeTab + 1) % len(m.tabs)
 	return m
 }
 
 func (m Model) PrevTab() Model {
+	if len(m.tabs) == 0 {
+		return m
+	}
 	m.activeTab = (m.activeTab - 1 + len(m.tabs)) % len(m.tabs)
 	return m
+}
+
 }
 
 func (m Model) SelectTab(index int) Model {
