@@ -15,8 +15,10 @@ setup_go_cache_env() {
 
   export GOCACHE="${GOCACHE:-${root}/.cache/go-build}"
   export GOMODCACHE="${GOMODCACHE:-${root}/.cache/go-mod}"
+  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${root}/.cache}"
+  export GOLANGCI_LINT_CACHE="${GOLANGCI_LINT_CACHE:-${root}/.cache/golangci-lint}"
 
-  mkdir -p "${GOCACHE}" "${GOMODCACHE}"
+  mkdir -p "${GOCACHE}" "${GOMODCACHE}" "${XDG_CACHE_HOME}" "${GOLANGCI_LINT_CACHE}"
 }
 
 has_go_module() {

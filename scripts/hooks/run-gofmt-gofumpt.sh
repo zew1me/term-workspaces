@@ -14,10 +14,10 @@ if ! has_go_module || ! has_any_go_files; then
 fi
 
 require_cmd go
-require_cmd gofumpt
+require_cmd golangci-lint
 
 go fmt ./...
-gofumpt -w .
+golangci-lint fmt ./...
 
 changed="$(git diff --name-only -- '*.go')"
 if [[ -n "${changed}" ]]; then

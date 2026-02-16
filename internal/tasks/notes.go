@@ -28,7 +28,7 @@ func EnsureTaskNote(notesDir, taskID string) (string, bool, error) {
 		return "", false, fmt.Errorf("taskID is required")
 	}
 
-	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+	if err := os.MkdirAll(notesDir, 0o750); err != nil {
 		return "", false, fmt.Errorf("create notes dir: %w", err)
 	}
 
@@ -39,7 +39,7 @@ func EnsureTaskNote(notesDir, taskID string) (string, bool, error) {
 		return "", false, fmt.Errorf("stat note file: %w", err)
 	}
 
-	if err := os.WriteFile(path, []byte(noteTemplate), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(noteTemplate), 0o600); err != nil {
 		return "", false, fmt.Errorf("write note template: %w", err)
 	}
 	return path, true, nil
