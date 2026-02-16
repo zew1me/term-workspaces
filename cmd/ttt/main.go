@@ -36,11 +36,54 @@ func runTask(args []string) error {
 	}
 
 	switch args[0] {
+	case "ensure-prepr":
+		return runTaskEnsurePrePR(args[1:])
 	case "link-pr":
 		return runTaskLinkPR(args[1:])
 	default:
 		return printTaskUsage()
 	}
+}
+
+func runTaskEnsurePrePR(args []string) error {
+	fs := flag.NewFlagSet("task ensure-prepr", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	repo := fs.String("repo", "", "GitHub repository in owner/repo format")
+	branch := fs.String("branch", "", "Pre-PR branch name")
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *repo == "" || *branch == "" {
+		return fmt.Errorf("--repo and --branch are required")
+	}
+
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	service := tasks.NewService(store)
+	task, created, err := service.GetOrCreatePrePRTask(context.Background(), *repo, *branch)
+	if err != nil {
+		return fmt.Errorf("ensure pre-pr task: %w", err)
+	}
+
+	status := "existing"
+	if created {
+		status = "created"
+	}
+	fmt.Printf("task_id=%s status=%s prepr_alias=%s\n",
+		task.ID,
+		status,
+		tasks.PrePRAliasValue(*repo, *branch),
+	)
+	return nil
 }
 
 func runTaskLinkPR(args []string) error {
@@ -92,12 +135,14 @@ func defaultDBPath() string {
 
 func printUsage() error {
 	fmt.Println("ttt usage:")
+	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }
 
 func printTaskUsage() error {
 	fmt.Println("ttt task usage:")
+	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }
