@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -58,6 +59,7 @@ func runTaskList(args []string) error {
 
 	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
 	groupBy := fs.String("group-by", "", "Group task aliases by metadata: repo, alias_type")
+	jsonOutput := fs.Bool("json", false, "Emit machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -79,6 +81,9 @@ func runTaskList(args []string) error {
 			fmt.Println("no tasks")
 			return nil
 		}
+		if *jsonOutput {
+			return writeJSON(groups)
+		}
 
 		fmt.Println("group_key\tcount")
 		for _, entry := range groups {
@@ -95,6 +100,9 @@ func runTaskList(args []string) error {
 		fmt.Println("no tasks")
 		return nil
 	}
+	if *jsonOutput {
+		return writeJSON(rows)
+	}
 
 	fmt.Println("task_id\talias_type\talias_value\trepo\tbranch\tpr")
 	for _, row := range rows {
@@ -107,6 +115,15 @@ func runTaskList(args []string) error {
 			row.PRNumber,
 		)
 	}
+	return nil
+}
+
+func writeJSON(value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal json output: %w", err)
+	}
+	fmt.Println(string(encoded))
 	return nil
 }
 
@@ -341,7 +358,7 @@ func printUsage() error {
 	fmt.Println("ttt usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
-	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type]")
+	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
@@ -351,7 +368,7 @@ func printTaskUsage() error {
 	fmt.Println("ttt task usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
-	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type]")
+	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
