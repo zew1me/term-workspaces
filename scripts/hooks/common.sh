@@ -9,6 +9,16 @@ cd_repo_root() {
   cd "$(repo_root)"
 }
 
+setup_go_cache_env() {
+  local root
+  root="$(repo_root)"
+
+  export GOCACHE="${GOCACHE:-${root}/.cache/go-build}"
+  export GOMODCACHE="${GOMODCACHE:-${root}/.cache/go-mod}"
+
+  mkdir -p "${GOCACHE}" "${GOMODCACHE}"
+}
+
 has_go_module() {
   [[ -f go.mod ]]
 }
