@@ -8,9 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
+	"strings"
 	"term-workspaces/internal/tasks"
+	"term-workspaces/internal/wezterm"
+	"time"
 )
+
+var newWezTermClient = func() wezterm.Client {
+	return wezterm.NewCLIClient()
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -38,19 +44,260 @@ func runTask(args []string) error {
 	}
 
 	switch args[0] {
+	case "dashboard":
+		return runTaskDashboard(args[1:])
 	case "ensure-prepr":
 		return runTaskEnsurePrePR(args[1:])
 	case "ensure-note":
 		return runTaskEnsureNote(args[1:])
 	case "list":
 		return runTaskList(args[1:])
+	case "open-session":
+		return runTaskOpenSession(args[1:])
 	case "open-note":
 		return runTaskOpenNote(args[1:])
+	case "sessions":
+		return runTaskSessions(args[1:])
 	case "link-pr":
 		return runTaskLinkPR(args[1:])
 	default:
 		return printTaskUsage()
 	}
+}
+
+type dashboardPayload struct {
+	Groups   dashboardGroups      `json:"groups"`
+	Sessions []tasks.TaskSession  `json:"sessions"`
+	Aliases  []tasks.TaskAliasRow `json:"aliases"`
+}
+
+type dashboardGroups struct {
+	ByRepo          []tasks.GroupCount `json:"by_repo"`
+	ByAliasType     []tasks.GroupCount `json:"by_alias_type"`
+	BySessionStatus []tasks.GroupCount `json:"by_session_status"`
+}
+
+func runTaskDashboard(args []string) error {
+	fs := flag.NewFlagSet("task dashboard", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+	jsonOutput := fs.Bool("json", true, "Emit machine-readable JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	ctx := context.Background()
+	byRepo, err := store.ListTaskAliasGroupCounts(ctx, "repo")
+	if err != nil {
+		return fmt.Errorf("dashboard repo groups: %w", err)
+	}
+	byAliasType, err := store.ListTaskAliasGroupCounts(ctx, "alias_type")
+	if err != nil {
+		return fmt.Errorf("dashboard alias_type groups: %w", err)
+	}
+	bySessionStatus, err := store.ListSessionStatusCounts(ctx)
+	if err != nil {
+		return fmt.Errorf("dashboard session status groups: %w", err)
+	}
+	aliases, err := store.ListTaskAliasRows(ctx)
+	if err != nil {
+		return fmt.Errorf("dashboard aliases: %w", err)
+	}
+	sessions, err := store.ListSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("dashboard sessions: %w", err)
+	}
+
+	payload := dashboardPayload{
+		Groups: dashboardGroups{
+			ByRepo:          byRepo,
+			ByAliasType:     byAliasType,
+			BySessionStatus: bySessionStatus,
+		},
+		Sessions: sessions,
+		Aliases:  aliases,
+	}
+
+	if *jsonOutput {
+		return writeJSON(payload)
+	}
+
+	fmt.Printf("repos=%d alias_types=%d session_statuses=%d aliases=%d sessions=%d\n",
+		len(byRepo), len(byAliasType), len(bySessionStatus), len(aliases), len(sessions))
+	return nil
+}
+
+func runTaskSessions(args []string) error {
+	fs := flag.NewFlagSet("task sessions", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+	jsonOutput := fs.Bool("json", false, "Emit machine-readable JSON")
+	groupBy := fs.String("group-by", "", "Group sessions by metadata: status")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	if *groupBy != "" {
+		if *groupBy != "status" {
+			return fmt.Errorf("unsupported group-by %q (supported: status)", *groupBy)
+		}
+		groups, err := store.ListSessionStatusCounts(context.Background())
+		if err != nil {
+			return fmt.Errorf("list session groups: %w", err)
+		}
+		if len(groups) == 0 {
+			fmt.Println("no sessions")
+			return nil
+		}
+		if *jsonOutput {
+			return writeJSON(groups)
+		}
+		fmt.Println("group_key\tcount")
+		for _, entry := range groups {
+			fmt.Printf("%s\t%d\n", entry.Key, entry.Count)
+		}
+		return nil
+	}
+
+	sessions, err := store.ListSessions(context.Background())
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
+	}
+	if len(sessions) == 0 {
+		fmt.Println("no sessions")
+		return nil
+	}
+	if *jsonOutput {
+		return writeJSON(sessions)
+	}
+
+	fmt.Println("task_id\tstatus\tworkspace\tpane_id\tcwd\tcommand\tcodex_session_id")
+	for _, session := range sessions {
+		fmt.Printf("%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			session.TaskID,
+			session.Status,
+			session.Workspace,
+			session.PaneID,
+			session.Cwd,
+			session.Command,
+			session.CodexSessionID,
+		)
+	}
+	return nil
+}
+
+func runTaskOpenSession(args []string) error {
+	fs := flag.NewFlagSet("task open-session", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	repo := fs.String("repo", "", "GitHub repository in owner/repo format")
+	branch := fs.String("branch", "", "Branch name (optional when using --pr)")
+	prNumber := fs.Int("pr", 0, "Pull request number (optional when using --branch)")
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+	cwd := fs.String("cwd", ".", "Working directory for spawned session")
+	workspace := fs.String("workspace", "", "Override workspace name")
+	command := fs.String("command", "codex", "Session command metadata label")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *repo == "" {
+		return fmt.Errorf("--repo is required")
+	}
+	if *branch == "" && *prNumber <= 0 {
+		return fmt.Errorf("one of --branch or --pr is required")
+	}
+
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	service := tasks.NewService(store)
+	task, err := resolveTaskForNote(context.Background(), service, *repo, *branch, *prNumber)
+	if err != nil {
+		return err
+	}
+
+	client := newWezTermClient()
+	now := time.Now().UTC()
+	existing, found, err := store.GetSessionByTaskID(context.Background(), task.ID)
+	if err != nil {
+		return fmt.Errorf("load existing session: %w", err)
+	}
+
+	if found && existing.PaneID > 0 {
+		if err := client.ActivatePane(context.Background(), existing.PaneID); err == nil {
+			existing.Status = tasks.SessionStatusOpen
+			existing.LastSeenAt = now
+			existing.UpdatedAt = now
+			if err := store.UpsertSession(context.Background(), existing); err != nil {
+				return fmt.Errorf("persist activated session: %w", err)
+			}
+			fmt.Printf("task_id=%s status=activated pane_id=%d workspace=%s\n", task.ID, existing.PaneID, existing.Workspace)
+			return nil
+		}
+	}
+
+	targetWorkspace := strings.TrimSpace(*workspace)
+	if targetWorkspace == "" {
+		if found && strings.TrimSpace(existing.Workspace) != "" {
+			targetWorkspace = existing.Workspace
+		} else {
+			targetWorkspace = workspaceForTaskID(task.ID)
+		}
+	}
+
+	paneID, err := client.Spawn(context.Background(), targetWorkspace, *cwd)
+	if err != nil {
+		return fmt.Errorf("spawn session pane: %w", err)
+	}
+
+	session := tasks.TaskSession{
+		TaskID:         task.ID,
+		Workspace:      targetWorkspace,
+		PaneID:         paneID,
+		Cwd:            *cwd,
+		Command:        *command,
+		Status:         tasks.SessionStatusOpen,
+		CodexSessionID: "",
+		LastSeenAt:     now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if found {
+		session.CreatedAt = existing.CreatedAt
+		if session.CreatedAt.IsZero() {
+			session.CreatedAt = now
+		}
+	}
+	if err := store.UpsertSession(context.Background(), session); err != nil {
+		return fmt.Errorf("persist spawned session: %w", err)
+	}
+
+	fmt.Printf("task_id=%s status=spawned pane_id=%d workspace=%s\n", task.ID, paneID, targetWorkspace)
+	return nil
 }
 
 func runTaskList(args []string) error {
@@ -261,6 +508,7 @@ func runTaskOpenNote(args []string) error {
 		return nil
 	}
 
+	// #nosec G204 -- editor command is intentionally user-configurable via $EDITOR.
 	command := exec.Command(editorName, editorArgs...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
@@ -328,6 +576,11 @@ func defaultNotesDir() string {
 	return filepath.Join(home, "Library", "Application Support", "ttt", "notes")
 }
 
+func workspaceForTaskID(taskID string) string {
+	sanitized := strings.NewReplacer("/", "-", ":", "-", "#", "-").Replace(taskID)
+	return "task-" + sanitized
+}
+
 func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branch string, prNumber int) (tasks.Task, error) {
 	switch {
 	case branch != "" && prNumber > 0:
@@ -357,9 +610,12 @@ func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branc
 func printUsage() error {
 	fmt.Println("ttt usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
+	fmt.Println("  ttt task dashboard [--db path] [--json]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
 	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
+	fmt.Println("  ttt task open-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--cwd path] [--workspace name] [--command label]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
+	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--json]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }
@@ -367,9 +623,12 @@ func printUsage() error {
 func printTaskUsage() error {
 	fmt.Println("ttt task usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
+	fmt.Println("  ttt task dashboard [--db path] [--json]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
 	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
+	fmt.Println("  ttt task open-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--cwd path] [--workspace name] [--command label]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
+	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--json]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }

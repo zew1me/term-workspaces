@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"term-workspaces/internal/wezterm"
 	"testing"
 )
 
@@ -110,6 +112,7 @@ func TestRunTaskEnsureNoteCreatesThenReusesFile(t *testing.T) {
 	if notePath == "" {
 		t.Fatalf("expected note_path in output: %q", out1)
 	}
+	// #nosec G304 -- notePath is generated in test setup via t.TempDir.
 	content, readErr := os.ReadFile(notePath)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", notePath, readErr)
@@ -401,6 +404,167 @@ func TestRunTaskListGroupByAliasTypeJSON(t *testing.T) {
 	}
 	if groups[0].Key == "" || groups[0].Count <= 0 {
 		t.Fatalf("expected key/count in grouped row: %#v", groups[0])
+	}
+}
+
+type fakeWezTermClient struct {
+	spawnCalls    int
+	activateCalls int
+	nextPaneID    int64
+}
+
+func (f *fakeWezTermClient) Spawn(_ context.Context, _ string, _ string) (int64, error) {
+	f.spawnCalls++
+	return f.nextPaneID, nil
+}
+
+func (f *fakeWezTermClient) ActivatePane(_ context.Context, _ int64) error {
+	f.activateCalls++
+	return nil
+}
+
+func (f *fakeWezTermClient) ListPanes(_ context.Context) ([]wezterm.Pane, error) {
+	return nil, nil
+}
+
+func TestRunTaskOpenSessionSpawnThenActivate(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 7001}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	out1, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/session-open",
+			"--db", dbPath,
+			"--cwd", "/tmp/work",
+		})
+	})
+	if err != nil {
+		t.Fatalf("first open-session run failed: %v", err)
+	}
+	first := parseKVLine(t, out1)
+	if first["status"] != "spawned" {
+		t.Fatalf("expected first status=spawned, got %q (%q)", first["status"], out1)
+	}
+
+	out2, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/session-open",
+			"--db", dbPath,
+			"--cwd", "/tmp/work",
+		})
+	})
+	if err != nil {
+		t.Fatalf("second open-session run failed: %v", err)
+	}
+	second := parseKVLine(t, out2)
+	if second["status"] != "activated" {
+		t.Fatalf("expected second status=activated, got %q (%q)", second["status"], out2)
+	}
+	if first["task_id"] != second["task_id"] {
+		t.Fatalf("expected same task_id across open-session runs")
+	}
+	if fake.spawnCalls != 1 {
+		t.Fatalf("expected one spawn call, got %d", fake.spawnCalls)
+	}
+	if fake.activateCalls != 1 {
+		t.Fatalf("expected one activate call, got %d", fake.activateCalls)
+	}
+}
+
+func TestRunTaskSessionsJSONAndGroupedStatus(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 42}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/session-list",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("open-session run failed: %v", err)
+	}
+
+	jsonOut, err := captureStdout(func() error {
+		return run([]string{"task", "sessions", "--db", dbPath, "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task sessions --json failed: %v", err)
+	}
+	var sessions []map[string]any
+	if err := json.Unmarshal([]byte(jsonOut), &sessions); err != nil {
+		t.Fatalf("json.Unmarshal sessions failed: %v (%q)", err, jsonOut)
+	}
+	if len(sessions) == 0 {
+		t.Fatalf("expected at least one session in json output")
+	}
+
+	groupOut, err := captureStdout(func() error {
+		return run([]string{"task", "sessions", "--db", dbPath, "--group-by", "status", "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task sessions grouped --json failed: %v", err)
+	}
+	var groups []map[string]any
+	if err := json.Unmarshal([]byte(groupOut), &groups); err != nil {
+		t.Fatalf("json.Unmarshal grouped sessions failed: %v (%q)", err, groupOut)
+	}
+	if len(groups) == 0 {
+		t.Fatalf("expected session status groups")
+	}
+}
+
+func TestRunTaskDashboardJSON(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 88}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/dashboard",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("open-session run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "dashboard", "--db", dbPath, "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task dashboard run failed: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v (%q)", err, out)
+	}
+	if _, ok := decoded["groups"]; !ok {
+		t.Fatalf("expected groups key in dashboard payload: %#v", decoded)
+	}
+	if _, ok := decoded["sessions"]; !ok {
+		t.Fatalf("expected sessions key in dashboard payload: %#v", decoded)
+	}
+	if _, ok := decoded["aliases"]; !ok {
+		t.Fatalf("expected aliases key in dashboard payload: %#v", decoded)
 	}
 }
 

@@ -18,6 +18,7 @@ func TestEnsureTaskNoteCreatesThenReuses(t *testing.T) {
 		t.Fatalf("expected first call to create note")
 	}
 
+	// #nosec G304 -- path is returned by EnsureTaskNote using t.TempDir.
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)

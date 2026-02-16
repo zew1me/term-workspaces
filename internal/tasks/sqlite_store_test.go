@@ -153,3 +153,57 @@ func TestSQLiteStoreListTaskAliasGroupCounts(t *testing.T) {
 		t.Fatalf("expected repo group for owner/repo, got %#v", repoCounts)
 	}
 }
+
+func TestSQLiteStoreUpsertAndListSessions(t *testing.T) {
+	t.Parallel()
+
+	h := newSQLiteTestHarness(t)
+	task, _, err := h.Service.GetOrCreatePrePRTask(h.Ctx, "owner/repo", "feature/session")
+	if err != nil {
+		t.Fatalf("GetOrCreatePrePRTask: %v", err)
+	}
+
+	now := time.Now().UTC()
+	session := TaskSession{
+		TaskID:         task.ID,
+		Workspace:      "task-session",
+		PaneID:         42,
+		Cwd:            "/tmp/repo",
+		Command:        "zsh",
+		Status:         SessionStatusOpen,
+		CodexSessionID: "codex-123",
+		LastSeenAt:     now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := h.Store.UpsertSession(h.Ctx, session); err != nil {
+		t.Fatalf("UpsertSession: %v", err)
+	}
+
+	got, found, err := h.Store.GetSessionByTaskID(h.Ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetSessionByTaskID: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected session to exist")
+	}
+	if got.Workspace != "task-session" || got.PaneID != 42 || got.Status != SessionStatusOpen {
+		t.Fatalf("unexpected session result: %#v", got)
+	}
+
+	list, err := h.Store.ListSessions(h.Ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(list) == 0 {
+		t.Fatalf("expected at least one session row")
+	}
+
+	groupCounts, err := h.Store.ListSessionStatusCounts(h.Ctx)
+	if err != nil {
+		t.Fatalf("ListSessionStatusCounts: %v", err)
+	}
+	if len(groupCounts) == 0 || groupCounts[0].Key == "" || groupCounts[0].Count <= 0 {
+		t.Fatalf("unexpected group counts: %#v", groupCounts)
+	}
+}
