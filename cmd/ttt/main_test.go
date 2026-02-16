@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -315,6 +316,80 @@ func TestRunTaskListGroupByAliasType(t *testing.T) {
 	}
 	if !strings.Contains(out, "prepr") || !strings.Contains(out, "pr") {
 		t.Fatalf("expected grouped output to include prepr and pr: %q", out)
+	}
+}
+
+func TestRunTaskListJSON(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "ensure-prepr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/json-list",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("ensure-prepr run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "list", "--db", dbPath, "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task list --json run failed: %v", err)
+	}
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v (output=%q)", err, out)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("expected at least one row in json output")
+	}
+	if rows[0]["alias_value"] == "" {
+		t.Fatalf("expected alias_value in first row: %#v", rows[0])
+	}
+}
+
+func TestRunTaskListGroupByAliasTypeJSON(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "ensure-prepr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/json-group",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("ensure-prepr run failed: %v", err)
+	}
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "link-pr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/json-group",
+			"--pr", "111",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("link-pr run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "list", "--db", dbPath, "--group-by", "alias_type", "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task list grouped json run failed: %v", err)
+	}
+
+	var groups []map[string]any
+	if err := json.Unmarshal([]byte(out), &groups); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v (output=%q)", err, out)
+	}
+	if len(groups) == 0 {
+		t.Fatalf("expected grouped json rows")
 	}
 }
 
