@@ -109,10 +109,13 @@ func TestRunUIInteractiveMode(t *testing.T) {
 	called := false
 
 	original := runUIInteractive
-	runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer) error {
+	runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer, refresh ui.RefreshFunc) error {
 		called = true
 		if !strings.Contains(model.View(), "PR Queue") {
 			t.Fatalf("expected model content in interactive run")
+		}
+		if refresh == nil {
+			t.Fatalf("expected refresh callback for interactive run")
 		}
 		return nil
 	}

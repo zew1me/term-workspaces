@@ -67,11 +67,13 @@ func runUI(args []string) error {
 		fmt.Println(model.View())
 		return nil
 	}
-	return runUIInteractive(model, os.Stdin, os.Stdout)
+	return runUIInteractive(model, os.Stdin, os.Stdout, func() (ui.Model, error) {
+		return buildUIModelFromStore(context.Background(), store)
+	})
 }
 
-var runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer) error {
-	return ui.RunInteractive(model, in, out)
+var runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer, refresh ui.RefreshFunc) error {
+	return ui.RunInteractive(model, in, out, refresh)
 }
 
 func buildUIModelFromStore(ctx context.Context, store *tasks.SQLiteStore) (ui.Model, error) {

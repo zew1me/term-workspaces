@@ -7,11 +7,22 @@ import (
 	"strings"
 )
 
-func RunInteractive(initial Model, in io.Reader, out io.Writer) error {
+type RefreshFunc func() (Model, error)
+
+func RunInteractive(initial Model, in io.Reader, out io.Writer, refresh RefreshFunc) error {
 	model := initial
 	scanner := bufio.NewScanner(in)
 
 	for {
+		if refresh != nil {
+			refreshed, err := refresh()
+			if err != nil {
+				return fmt.Errorf("refresh ui model: %w", err)
+			}
+			refreshed = refreshed.SelectTab(model.ActiveTabIndex())
+			model = refreshed
+		}
+
 		if _, err := fmt.Fprint(out, model.View()); err != nil {
 			return fmt.Errorf("write ui view: %w", err)
 		}

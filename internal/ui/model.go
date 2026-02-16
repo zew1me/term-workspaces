@@ -75,6 +75,10 @@ func (m Model) SelectTab(index int) Model {
 	return m
 }
 
+func (m Model) ActiveTabIndex() int {
+	return m.activeTab
+}
+
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString("ttt UI (preview)\n")
