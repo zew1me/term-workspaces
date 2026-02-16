@@ -1,0 +1,21 @@
+# Configuration for prek hooks
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-added-large-files" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "go-format", name = "Go format (go fmt + gofumpt)", entry = "scripts/hooks/run-gofmt-gofumpt.sh", language = "system", pass_filenames = false, stages = ["pre-commit"] },
+  { id = "go-lint", name = "Go lint (golangci-lint)", entry = "scripts/hooks/run-golangci-lint.sh", language = "system", pass_filenames = false, stages = ["pre-commit"] },
+  { id = "go-test", name = "Go test (changed packages)", entry = "scripts/hooks/run-go-test.sh", language = "system", pass_filenames = false, stages = ["pre-commit"] },
+  { id = "go-test-race", name = "Go test --race (changed packages)", entry = "scripts/hooks/run-go-test-race-changed.sh", language = "system", pass_filenames = false, stages = ["pre-push"] },
+  { id = "go-build", name = "Go build (changed packages)", entry = "scripts/hooks/run-go-build-changed.sh", language = "system", pass_filenames = false, stages = ["pre-push"] },
+  { id = "go-vuln", name = "Go vuln check", entry = "scripts/hooks/run-govulncheck.sh", language = "system", pass_filenames = false, stages = ["pre-push"] },
+]
