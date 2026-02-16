@@ -12,3 +12,8 @@ type TaskAliasRow struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
+
+type GroupCount struct {
+	Key   string
+	Count int
+}

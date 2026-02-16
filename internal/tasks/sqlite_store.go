@@ -299,6 +299,53 @@ func (s *SQLiteStore) ListTaskAliasRows(ctx context.Context) ([]TaskAliasRow, er
 	return result, nil
 }
 
+func (s *SQLiteStore) ListTaskAliasGroupCounts(ctx context.Context, groupBy string) ([]GroupCount, error) {
+	column, err := taskAliasGroupByColumn(groupBy)
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(
+		`SELECT COALESCE(%s, ''), COUNT(1)
+		 FROM task_aliases
+		 GROUP BY 1
+		 ORDER BY COUNT(1) DESC, 1 ASC`,
+		column,
+	)
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query task alias group counts: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	result := make([]GroupCount, 0)
+	for rows.Next() {
+		var entry GroupCount
+		if err := rows.Scan(&entry.Key, &entry.Count); err != nil {
+			return nil, fmt.Errorf("scan task alias group count: %w", err)
+		}
+		result = append(result, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task alias group counts: %w", err)
+	}
+	return result, nil
+}
+
+func taskAliasGroupByColumn(groupBy string) (string, error) {
+	switch groupBy {
+	case "repo":
+		return "repo", nil
+	case "alias_type":
+		return "alias_type", nil
+	default:
+		return "", fmt.Errorf("unsupported group-by %q (supported: repo, alias_type)", groupBy)
+	}
+}
+
 func scanTask(row *sql.Row) (Task, bool, error) {
 	var (
 		task      Task
