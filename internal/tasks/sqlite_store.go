@@ -234,6 +234,71 @@ func (s *SQLiteStore) UpsertAlias(ctx context.Context, alias TaskAlias) error {
 	return nil
 }
 
+func (s *SQLiteStore) ListTaskAliasRows(ctx context.Context) ([]TaskAliasRow, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT a.task_id, a.alias_type, a.alias_value, a.repo, a.branch, a.pr_number, a.created_at, a.updated_at
+		 FROM task_aliases a
+		 ORDER BY a.updated_at DESC, a.alias_value ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query task alias rows: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	result := make([]TaskAliasRow, 0)
+	for rows.Next() {
+		var (
+			row                TaskAliasRow
+			aliasType          string
+			repo, branch       sql.NullString
+			prNumber           sql.NullInt64
+			createdAtRaw       string
+			updatedAtRaw       string
+		)
+
+		if err := rows.Scan(
+			&row.TaskID,
+			&aliasType,
+			&row.AliasValue,
+			&repo,
+			&branch,
+			&prNumber,
+			&createdAtRaw,
+			&updatedAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan task alias row: %w", err)
+		}
+
+		row.AliasType = AliasType(aliasType)
+		row.Repo = repo.String
+		row.Branch = branch.String
+		if prNumber.Valid {
+			row.PRNumber = int(prNumber.Int64)
+		}
+
+		createdAt, err := time.Parse(time.RFC3339Nano, createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse task alias created_at: %w", err)
+		}
+		updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse task alias updated_at: %w", err)
+		}
+		row.CreatedAt = createdAt
+		row.UpdatedAt = updatedAt
+
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task alias rows: %w", err)
+	}
+	return result, nil
+}
+
 func scanTask(row *sql.Row) (Task, bool, error) {
 	var (
 		task      Task
