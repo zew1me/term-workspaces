@@ -57,6 +57,7 @@ func runTaskList(args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+	groupBy := fs.String("group-by", "", "Group task aliases by metadata: repo, alias_type")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -68,6 +69,23 @@ func runTaskList(args []string) error {
 	defer func() {
 		_ = store.Close()
 	}()
+
+	if *groupBy != "" {
+		groups, err := store.ListTaskAliasGroupCounts(context.Background(), *groupBy)
+		if err != nil {
+			return fmt.Errorf("list task groups: %w", err)
+		}
+		if len(groups) == 0 {
+			fmt.Println("no tasks")
+			return nil
+		}
+
+		fmt.Println("group_key\tcount")
+		for _, entry := range groups {
+			fmt.Printf("%s\t%d\n", entry.Key, entry.Count)
+		}
+		return nil
+	}
 
 	rows, err := store.ListTaskAliasRows(context.Background())
 	if err != nil {
@@ -323,7 +341,7 @@ func printUsage() error {
 	fmt.Println("ttt usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
-	fmt.Println("  ttt task list [--db path]")
+	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
@@ -333,7 +351,7 @@ func printTaskUsage() error {
 	fmt.Println("ttt task usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
-	fmt.Println("  ttt task list [--db path]")
+	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
