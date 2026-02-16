@@ -124,3 +124,32 @@ func TestSQLiteStoreListTaskAliasRows(t *testing.T) {
 		t.Fatalf("expected PR row for PR 55")
 	}
 }
+
+func TestSQLiteStoreListTaskAliasGroupCounts(t *testing.T) {
+	t.Parallel()
+
+	h := newSQLiteTestHarness(t)
+
+	if _, _, err := h.Service.GetOrCreatePrePRTask(h.Ctx, "owner/repo", "feature/group"); err != nil {
+		t.Fatalf("GetOrCreatePrePRTask: %v", err)
+	}
+	if _, _, err := h.Service.LinkPRToPrePR(h.Ctx, "owner/repo", "feature/group", 19); err != nil {
+		t.Fatalf("LinkPRToPrePR: %v", err)
+	}
+
+	aliasTypeCounts, err := h.Store.ListTaskAliasGroupCounts(h.Ctx, "alias_type")
+	if err != nil {
+		t.Fatalf("ListTaskAliasGroupCounts(alias_type): %v", err)
+	}
+	if len(aliasTypeCounts) < 2 {
+		t.Fatalf("expected at least two alias_type groups, got %d", len(aliasTypeCounts))
+	}
+
+	repoCounts, err := h.Store.ListTaskAliasGroupCounts(h.Ctx, "repo")
+	if err != nil {
+		t.Fatalf("ListTaskAliasGroupCounts(repo): %v", err)
+	}
+	if len(repoCounts) == 0 || repoCounts[0].Key != "owner/repo" {
+		t.Fatalf("expected repo group for owner/repo, got %#v", repoCounts)
+	}
+}

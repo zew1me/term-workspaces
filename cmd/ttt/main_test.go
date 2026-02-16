@@ -278,6 +278,46 @@ func TestRunTaskListIncludesCreatedAliases(t *testing.T) {
 	}
 }
 
+func TestRunTaskListGroupByAliasType(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "ensure-prepr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/group-list",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("ensure-prepr run failed: %v", err)
+	}
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "link-pr",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/group-list",
+			"--pr", "765",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("link-pr run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "list", "--db", dbPath, "--group-by", "alias_type"})
+	})
+	if err != nil {
+		t.Fatalf("task list --group-by alias_type failed: %v", err)
+	}
+	if !strings.Contains(out, "group_key\tcount") {
+		t.Fatalf("expected grouped header in output: %q", out)
+	}
+	if !strings.Contains(out, "prepr") || !strings.Contains(out, "pr") {
+		t.Fatalf("expected grouped output to include prepr and pr: %q", out)
+	}
+}
+
 func captureStdout(fn func() error) (string, error) {
 	originalStdout := os.Stdout
 	reader, writer, err := os.Pipe()
