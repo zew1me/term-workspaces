@@ -126,3 +126,13 @@ func (s *Service) LinkPRToPrePR(ctx context.Context, repo, branch string, prNumb
 
 	return target, status, nil
 }
+
+func (s *Service) GetTaskByPrePR(ctx context.Context, repo, branch string) (Task, bool, error) {
+	aliasValue := PrePRAliasValue(repo, branch)
+	return s.store.GetTaskByAlias(ctx, aliasValue)
+}
+
+func (s *Service) GetTaskByPR(ctx context.Context, repo string, prNumber int) (Task, bool, error) {
+	aliasValue := PRAliasValue(repo, prNumber)
+	return s.store.GetTaskByAlias(ctx, aliasValue)
+}
