@@ -208,6 +208,33 @@ func TestRunTaskEnsureNoteFailsWhenPRAliasMissing(t *testing.T) {
 	}
 }
 
+func TestRunTaskOpenNoteDryRunUsesEditorEnv(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	notesDir := t.TempDir() + "/notes"
+	t.Setenv("EDITOR", "vim -u NONE")
+
+	out, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-note",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/open-note",
+			"--db", dbPath,
+			"--notes-dir", notesDir,
+			"--dry-run",
+		})
+	})
+	if err != nil {
+		t.Fatalf("open-note dry-run failed: %v", err)
+	}
+	fields := parseKVLine(t, out)
+	if fields["editor"] != "vim" {
+		t.Fatalf("expected editor=vim in output, got %q (%q)", fields["editor"], out)
+	}
+	if !strings.Contains(out, "NONE") {
+		t.Fatalf("expected dry-run output args to include 'NONE': %q", out)
+	}
+}
+
 func captureStdout(fn func() error) (string, error) {
 	originalStdout := os.Stdout
 	reader, writer, err := os.Pipe()

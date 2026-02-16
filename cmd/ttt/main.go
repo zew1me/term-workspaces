@@ -180,7 +180,7 @@ func runTaskOpenNote(args []string) error {
 
 	editorName, editorArgs := tasks.ResolveEditorCommand(os.Getenv("EDITOR"), path)
 	if *dryRun {
-		fmt.Printf("task_id=%s note_path=%s editor=%s args=%v\n", task.ID, path, editorName, editorArgs)
+		fmt.Printf("task_id=%s status=dry_run note_path=%s editor=%s args=%v\n", task.ID, path, editorName, editorArgs)
 		return nil
 	}
 
@@ -192,7 +192,7 @@ func runTaskOpenNote(args []string) error {
 		return fmt.Errorf("open note with editor: %w", err)
 	}
 
-	fmt.Printf("task_id=%s note_path=%s editor=%s\n", task.ID, path, editorName)
+	fmt.Printf("task_id=%s status=opened note_path=%s editor=%s\n", task.ID, path, editorName)
 	return nil
 }
 
