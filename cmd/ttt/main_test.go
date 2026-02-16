@@ -410,21 +410,53 @@ func TestRunTaskListGroupByAliasTypeJSON(t *testing.T) {
 type fakeWezTermClient struct {
 	spawnCalls    int
 	activateCalls int
+	killCalls     int
 	nextPaneID    int64
+	spawned       []wezterm.Pane
+	panes         []wezterm.Pane
+	listErr       error
+	activateErr   error
+	killErr       error
 }
 
-func (f *fakeWezTermClient) Spawn(_ context.Context, _ string, _ string) (int64, error) {
+func (f *fakeWezTermClient) Spawn(_ context.Context, workspace string, _ string) (int64, error) {
 	f.spawnCalls++
-	return f.nextPaneID, nil
+	paneID := f.nextPaneID + int64(f.spawnCalls-1)
+	pane := wezterm.Pane{PaneID: paneID, Workspace: workspace}
+	f.spawned = append(f.spawned, pane)
+	f.panes = append(f.panes, pane)
+	return paneID, nil
 }
 
 func (f *fakeWezTermClient) ActivatePane(_ context.Context, _ int64) error {
 	f.activateCalls++
+	if f.activateErr != nil {
+		return f.activateErr
+	}
+	return nil
+}
+
+func (f *fakeWezTermClient) KillPane(_ context.Context, paneID int64) error {
+	f.killCalls++
+	if f.killErr != nil {
+		return f.killErr
+	}
+	filtered := make([]wezterm.Pane, 0, len(f.panes))
+	for _, pane := range f.panes {
+		if pane.PaneID == paneID {
+			continue
+		}
+		filtered = append(filtered, pane)
+	}
+	f.panes = filtered
 	return nil
 }
 
 func (f *fakeWezTermClient) ListPanes(_ context.Context) ([]wezterm.Pane, error) {
-	return nil, nil
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]wezterm.Pane(nil), f.panes...), nil
 }
 
 func TestRunTaskOpenSessionSpawnThenActivate(t *testing.T) {
@@ -476,6 +508,59 @@ func TestRunTaskOpenSessionSpawnThenActivate(t *testing.T) {
 	}
 	if fake.activateCalls != 1 {
 		t.Fatalf("expected one activate call, got %d", fake.activateCalls)
+	}
+}
+
+func TestRunTaskOpenSessionRespawnsWhenStoredPaneMissing(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 8001}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	out1, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/session-stale",
+			"--db", dbPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("first open-session run failed: %v", err)
+	}
+	first := parseKVLine(t, out1)
+	if first["status"] != "spawned" {
+		t.Fatalf("expected first status=spawned, got %q (%q)", first["status"], out1)
+	}
+
+	// Simulate external pane close so the stored pane id becomes stale.
+	fake.panes = nil
+
+	out2, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/session-stale",
+			"--db", dbPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("second open-session run failed: %v", err)
+	}
+	second := parseKVLine(t, out2)
+	if second["status"] != "spawned" {
+		t.Fatalf("expected second status=spawned after stale reconcile, got %q (%q)", second["status"], out2)
+	}
+	if first["workspace"] != second["workspace"] {
+		t.Fatalf("expected stable workspace across repeated opens, got %q and %q", first["workspace"], second["workspace"])
+	}
+	if fake.spawnCalls != 2 {
+		t.Fatalf("expected two spawn calls, got %d", fake.spawnCalls)
+	}
+	if fake.activateCalls != 0 {
+		t.Fatalf("expected zero activate calls for stale session, got %d", fake.activateCalls)
 	}
 }
 
@@ -563,8 +648,122 @@ func TestRunTaskDashboardJSON(t *testing.T) {
 	if _, ok := decoded["sessions"]; !ok {
 		t.Fatalf("expected sessions key in dashboard payload: %#v", decoded)
 	}
+	if _, ok := decoded["open_sessions"]; !ok {
+		t.Fatalf("expected open_sessions key in dashboard payload: %#v", decoded)
+	}
 	if _, ok := decoded["aliases"]; !ok {
 		t.Fatalf("expected aliases key in dashboard payload: %#v", decoded)
+	}
+	if _, ok := decoded["tasks"]; !ok {
+		t.Fatalf("expected tasks key in dashboard payload: %#v", decoded)
+	}
+}
+
+func TestRunTaskCloseSessionClosesAndClearsPane(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 300}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/close-session",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("open-session run failed: %v", err)
+	}
+
+	out, err := captureStdout(func() error {
+		return run([]string{
+			"task", "close-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/close-session",
+			"--db", dbPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("close-session run failed: %v", err)
+	}
+	fields := parseKVLine(t, out)
+	if fields["status"] != "closed" {
+		t.Fatalf("expected status=closed, got %q (%q)", fields["status"], out)
+	}
+	if fake.killCalls != 1 {
+		t.Fatalf("expected one kill call, got %d", fake.killCalls)
+	}
+
+	sessionsOut, err := captureStdout(func() error {
+		return run([]string{"task", "sessions", "--db", dbPath, "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task sessions --json failed: %v", err)
+	}
+	var sessions []map[string]any
+	if err := json.Unmarshal([]byte(sessionsOut), &sessions); err != nil {
+		t.Fatalf("json.Unmarshal sessions failed: %v (%q)", err, sessionsOut)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session row, got %d", len(sessions))
+	}
+	if sessions[0]["status"] != "closed" {
+		t.Fatalf("expected persisted session status=closed, got %#v", sessions[0])
+	}
+	if pane, ok := sessions[0]["pane_id"].(float64); !ok || pane != 0 {
+		t.Fatalf("expected pane_id=0 after close, got %#v", sessions[0]["pane_id"])
+	}
+}
+
+func TestRunTaskSessionsReconcileUpdatesSessionStatus(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	fake := &fakeWezTermClient{nextPaneID: 900}
+
+	originalFactory := newWezTermClient
+	newWezTermClient = func() wezterm.Client { return fake }
+	t.Cleanup(func() { newWezTermClient = originalFactory })
+
+	if _, err := captureStdout(func() error {
+		return run([]string{
+			"task", "open-session",
+			"--repo", "zew1me/term-workspaces",
+			"--branch", "feature/reconcile",
+			"--db", dbPath,
+		})
+	}); err != nil {
+		t.Fatalf("open-session run failed: %v", err)
+	}
+
+	// Simulate pane no longer alive before reconcile.
+	fake.panes = nil
+
+	out, err := captureStdout(func() error {
+		return run([]string{"task", "sessions", "--db", dbPath, "--reconcile", "--json"})
+	})
+	if err != nil {
+		t.Fatalf("task sessions --reconcile --json failed: %v", err)
+	}
+	var sessions []map[string]any
+	if err := json.Unmarshal([]byte(out), &sessions); err != nil {
+		t.Fatalf("json.Unmarshal sessions failed: %v (%q)", err, out)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session row, got %d", len(sessions))
+	}
+	if sessions[0]["status"] != "closed" {
+		t.Fatalf("expected reconciled status=closed, got %#v", sessions[0])
+	}
+}
+
+func TestWorkspaceForTaskIDDeterministic(t *testing.T) {
+	taskID := "task_1700000000000_1"
+	first := workspaceForTaskID(taskID)
+	second := workspaceForTaskID(taskID)
+	if first != second {
+		t.Fatalf("expected stable workspace, got %q and %q", first, second)
 	}
 }
 

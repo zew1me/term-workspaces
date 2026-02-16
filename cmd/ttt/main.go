@@ -46,6 +46,8 @@ func runTask(args []string) error {
 	switch args[0] {
 	case "dashboard":
 		return runTaskDashboard(args[1:])
+	case "close-session":
+		return runTaskCloseSession(args[1:])
 	case "ensure-prepr":
 		return runTaskEnsurePrePR(args[1:])
 	case "ensure-note":
@@ -66,15 +68,23 @@ func runTask(args []string) error {
 }
 
 type dashboardPayload struct {
-	Groups   dashboardGroups      `json:"groups"`
-	Sessions []tasks.TaskSession  `json:"sessions"`
-	Aliases  []tasks.TaskAliasRow `json:"aliases"`
+	Groups       dashboardGroups            `json:"groups"`
+	Sessions     []tasks.TaskSession        `json:"sessions"`
+	OpenSessions []tasks.TaskSession        `json:"open_sessions"`
+	Aliases      []tasks.TaskAliasRow       `json:"aliases"`
+	Tasks        []dashboardTaskMergedEntry `json:"tasks"`
 }
 
 type dashboardGroups struct {
 	ByRepo          []tasks.GroupCount `json:"by_repo"`
 	ByAliasType     []tasks.GroupCount `json:"by_alias_type"`
 	BySessionStatus []tasks.GroupCount `json:"by_session_status"`
+}
+
+type dashboardTaskMergedEntry struct {
+	Task    tasks.Task           `json:"task"`
+	Aliases []tasks.TaskAliasRow `json:"aliases"`
+	Session *tasks.TaskSession   `json:"session,omitempty"`
 }
 
 func runTaskDashboard(args []string) error {
@@ -112,6 +122,10 @@ func runTaskDashboard(args []string) error {
 	if err != nil {
 		return fmt.Errorf("dashboard aliases: %w", err)
 	}
+	taskRows, err := store.ListTasks(ctx)
+	if err != nil {
+		return fmt.Errorf("dashboard tasks: %w", err)
+	}
 	sessions, err := store.ListSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("dashboard sessions: %w", err)
@@ -123,16 +137,18 @@ func runTaskDashboard(args []string) error {
 			ByAliasType:     byAliasType,
 			BySessionStatus: bySessionStatus,
 		},
-		Sessions: sessions,
-		Aliases:  aliases,
+		Sessions:     sessions,
+		OpenSessions: filterOpenSessions(sessions),
+		Aliases:      aliases,
+		Tasks:        mergeDashboardTaskRows(taskRows, aliases, sessions),
 	}
 
 	if *jsonOutput {
 		return writeJSON(payload)
 	}
 
-	fmt.Printf("repos=%d alias_types=%d session_statuses=%d aliases=%d sessions=%d\n",
-		len(byRepo), len(byAliasType), len(bySessionStatus), len(aliases), len(sessions))
+	fmt.Printf("repos=%d alias_types=%d session_statuses=%d aliases=%d sessions=%d open_sessions=%d tasks=%d\n",
+		len(byRepo), len(byAliasType), len(bySessionStatus), len(aliases), len(sessions), len(payload.OpenSessions), len(payload.Tasks))
 	return nil
 }
 
@@ -143,6 +159,7 @@ func runTaskSessions(args []string) error {
 	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
 	jsonOutput := fs.Bool("json", false, "Emit machine-readable JSON")
 	groupBy := fs.String("group-by", "", "Group sessions by metadata: status")
+	reconcile := fs.Bool("reconcile", false, "Reconcile session health against live WezTerm panes before output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -154,12 +171,18 @@ func runTaskSessions(args []string) error {
 	defer func() {
 		_ = store.Close()
 	}()
+	ctx := context.Background()
+	if *reconcile {
+		if err := reconcileSessionHealth(ctx, store, newWezTermClient()); err != nil {
+			return fmt.Errorf("reconcile sessions: %w", err)
+		}
+	}
 
 	if *groupBy != "" {
 		if *groupBy != "status" {
 			return fmt.Errorf("unsupported group-by %q (supported: status)", *groupBy)
 		}
-		groups, err := store.ListSessionStatusCounts(context.Background())
+		groups, err := store.ListSessionStatusCounts(ctx)
 		if err != nil {
 			return fmt.Errorf("list session groups: %w", err)
 		}
@@ -177,7 +200,7 @@ func runTaskSessions(args []string) error {
 		return nil
 	}
 
-	sessions, err := store.ListSessions(context.Background())
+	sessions, err := store.ListSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -241,18 +264,30 @@ func runTaskOpenSession(args []string) error {
 	}
 
 	client := newWezTermClient()
+	ctx := context.Background()
 	now := time.Now().UTC()
-	existing, found, err := store.GetSessionByTaskID(context.Background(), task.ID)
+	existing, found, err := store.GetSessionByTaskID(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("load existing session: %w", err)
 	}
 
 	if found && existing.PaneID > 0 {
-		if err := client.ActivatePane(context.Background(), existing.PaneID); err == nil {
+		panes, err := client.ListPanes(ctx)
+		if err != nil {
+			return fmt.Errorf("list panes for liveness check: %w", err)
+		}
+		if !paneIDPresent(panes, existing.PaneID) {
+			existing.Status = tasks.SessionStatusClosed
+			existing.PaneID = 0
+			existing.UpdatedAt = now
+			if err := store.UpsertSession(ctx, existing); err != nil {
+				return fmt.Errorf("persist stale session: %w", err)
+			}
+		} else if err := client.ActivatePane(ctx, existing.PaneID); err == nil {
 			existing.Status = tasks.SessionStatusOpen
 			existing.LastSeenAt = now
 			existing.UpdatedAt = now
-			if err := store.UpsertSession(context.Background(), existing); err != nil {
+			if err := store.UpsertSession(ctx, existing); err != nil {
 				return fmt.Errorf("persist activated session: %w", err)
 			}
 			fmt.Printf("task_id=%s status=activated pane_id=%d workspace=%s\n", task.ID, existing.PaneID, existing.Workspace)
@@ -269,7 +304,7 @@ func runTaskOpenSession(args []string) error {
 		}
 	}
 
-	paneID, err := client.Spawn(context.Background(), targetWorkspace, *cwd)
+	paneID, err := client.Spawn(ctx, targetWorkspace, *cwd)
 	if err != nil {
 		return fmt.Errorf("spawn session pane: %w", err)
 	}
@@ -292,11 +327,73 @@ func runTaskOpenSession(args []string) error {
 			session.CreatedAt = now
 		}
 	}
-	if err := store.UpsertSession(context.Background(), session); err != nil {
+	if err := store.UpsertSession(ctx, session); err != nil {
 		return fmt.Errorf("persist spawned session: %w", err)
 	}
 
 	fmt.Printf("task_id=%s status=spawned pane_id=%d workspace=%s\n", task.ID, paneID, targetWorkspace)
+	return nil
+}
+
+func runTaskCloseSession(args []string) error {
+	fs := flag.NewFlagSet("task close-session", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	repo := fs.String("repo", "", "GitHub repository in owner/repo format")
+	branch := fs.String("branch", "", "Branch name (optional when using --pr)")
+	prNumber := fs.Int("pr", 0, "Pull request number (optional when using --branch)")
+	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *repo == "" {
+		return fmt.Errorf("--repo is required")
+	}
+	if *branch == "" && *prNumber <= 0 {
+		return fmt.Errorf("one of --branch or --pr is required")
+	}
+
+	store, err := tasks.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite task store: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	service := tasks.NewService(store)
+	task, err := resolveTaskForNote(context.Background(), service, *repo, *branch, *prNumber)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	session, found, err := store.GetSessionByTaskID(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("load existing session: %w", err)
+	}
+	if !found {
+		fmt.Printf("task_id=%s status=missing\n", task.ID)
+		return nil
+	}
+
+	client := newWezTermClient()
+	if session.PaneID > 0 {
+		if err := client.KillPane(ctx, session.PaneID); err != nil {
+			return fmt.Errorf("kill pane %d: %w", session.PaneID, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	session.Status = tasks.SessionStatusClosed
+	// Policy: retain workspace/cwd/command metadata but clear stale pane binding.
+	session.PaneID = 0
+	session.UpdatedAt = now
+	if err := store.UpsertSession(ctx, session); err != nil {
+		return fmt.Errorf("persist closed session: %w", err)
+	}
+
+	fmt.Printf("task_id=%s status=closed workspace=%s\n", task.ID, session.Workspace)
 	return nil
 }
 
@@ -581,6 +678,101 @@ func workspaceForTaskID(taskID string) string {
 	return "task-" + sanitized
 }
 
+func filterOpenSessions(sessions []tasks.TaskSession) []tasks.TaskSession {
+	filtered := make([]tasks.TaskSession, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Status == tasks.SessionStatusOpen {
+			filtered = append(filtered, session)
+		}
+	}
+	return filtered
+}
+
+func mergeDashboardTaskRows(
+	taskRows []tasks.Task,
+	aliases []tasks.TaskAliasRow,
+	sessions []tasks.TaskSession,
+) []dashboardTaskMergedEntry {
+	aliasesByTask := make(map[string][]tasks.TaskAliasRow, len(taskRows))
+	for _, alias := range aliases {
+		aliasesByTask[alias.TaskID] = append(aliasesByTask[alias.TaskID], alias)
+	}
+
+	sessionsByTask := make(map[string]tasks.TaskSession, len(sessions))
+	for _, session := range sessions {
+		sessionsByTask[session.TaskID] = session
+	}
+
+	result := make([]dashboardTaskMergedEntry, 0, len(taskRows))
+	for _, row := range taskRows {
+		entry := dashboardTaskMergedEntry{
+			Task:    row,
+			Aliases: aliasesByTask[row.ID],
+		}
+		if session, ok := sessionsByTask[row.ID]; ok {
+			sessionCopy := session
+			entry.Session = &sessionCopy
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
+func paneIDPresent(panes []wezterm.Pane, paneID int64) bool {
+	for _, pane := range panes {
+		if pane.PaneID == paneID {
+			return true
+		}
+	}
+	return false
+}
+
+func reconcileSessionHealth(ctx context.Context, store *tasks.SQLiteStore, client wezterm.Client) error {
+	panes, err := client.ListPanes(ctx)
+	if err != nil {
+		return err
+	}
+	sessions, err := store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	paneSet := make(map[int64]struct{}, len(panes))
+	for _, pane := range panes {
+		paneSet[pane.PaneID] = struct{}{}
+	}
+
+	now := time.Now().UTC()
+	for _, session := range sessions {
+		original := session.Status
+		next := original
+		switch {
+		case session.PaneID <= 0:
+			if session.Status != tasks.SessionStatusClosed {
+				next = tasks.SessionStatusUnknown
+			}
+		case paneIDPresentMap(paneSet, session.PaneID):
+			next = tasks.SessionStatusOpen
+			session.LastSeenAt = now
+		default:
+			next = tasks.SessionStatusClosed
+		}
+		if next == original {
+			continue
+		}
+		session.Status = next
+		session.UpdatedAt = now
+		if err := store.UpsertSession(ctx, session); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func paneIDPresentMap(panes map[int64]struct{}, paneID int64) bool {
+	_, ok := panes[paneID]
+	return ok
+}
+
 func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branch string, prNumber int) (tasks.Task, error) {
 	switch {
 	case branch != "" && prNumber > 0:
@@ -610,12 +802,13 @@ func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branc
 func printUsage() error {
 	fmt.Println("ttt usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
+	fmt.Println("  ttt task close-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path]")
 	fmt.Println("  ttt task dashboard [--db path] [--json]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
 	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
 	fmt.Println("  ttt task open-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--cwd path] [--workspace name] [--command label]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
-	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--json]")
+	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--reconcile] [--json]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }
@@ -623,12 +816,13 @@ func printUsage() error {
 func printTaskUsage() error {
 	fmt.Println("ttt task usage:")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
+	fmt.Println("  ttt task close-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path]")
 	fmt.Println("  ttt task dashboard [--db path] [--json]")
 	fmt.Println("  ttt task ensure-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path]")
 	fmt.Println("  ttt task list [--db path] [--group-by repo|alias_type] [--json]")
 	fmt.Println("  ttt task open-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--cwd path] [--workspace name] [--command label]")
 	fmt.Println("  ttt task open-note --repo owner/repo [--branch feature/name] [--pr 123] [--db path] [--notes-dir path] [--dry-run]")
-	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--json]")
+	fmt.Println("  ttt task sessions [--db path] [--group-by status] [--reconcile] [--json]")
 	fmt.Println("  ttt task link-pr --repo owner/repo --branch feature/name --pr 123 [--db path]")
 	return nil
 }

@@ -16,6 +16,7 @@ type Pane struct {
 type Client interface {
 	Spawn(ctx context.Context, workspace, cwd string) (int64, error)
 	ActivatePane(ctx context.Context, paneID int64) error
+	KillPane(ctx context.Context, paneID int64) error
 	ListPanes(ctx context.Context) ([]Pane, error)
 }
 
@@ -55,6 +56,14 @@ func (c *CLIClient) ActivatePane(ctx context.Context, paneID int64) error {
 	_, err := c.exec(ctx, "wezterm", "cli", "activate-pane", "--pane-id", strconv.FormatInt(paneID, 10))
 	if err != nil {
 		return fmt.Errorf("wezterm activate-pane %d: %w", paneID, err)
+	}
+	return nil
+}
+
+func (c *CLIClient) KillPane(ctx context.Context, paneID int64) error {
+	_, err := c.exec(ctx, "wezterm", "cli", "kill-pane", "--pane-id", strconv.FormatInt(paneID, 10))
+	if err != nil {
+		return fmt.Errorf("wezterm kill-pane %d: %w", paneID, err)
 	}
 	return nil
 }

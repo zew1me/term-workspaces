@@ -51,6 +51,27 @@ func TestActivatePane(t *testing.T) {
 	}
 }
 
+func TestKillPane(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	client := NewCLIClientWithExec(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		called = true
+		expected := []string{"cli", "kill-pane", "--pane-id", "91"}
+		if name != "wezterm" || !reflect.DeepEqual(args, expected) {
+			t.Fatalf("unexpected call %q %#v", name, args)
+		}
+		return nil, nil
+	})
+
+	if err := client.KillPane(context.Background(), 91); err != nil {
+		t.Fatalf("KillPane returned error: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected kill call")
+	}
+}
+
 func TestListPanesParsesWorkspaceHierarchy(t *testing.T) {
 	t.Parallel()
 
