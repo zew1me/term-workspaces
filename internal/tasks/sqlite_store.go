@@ -2,40 +2,51 @@ package tasks
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlitegorm "github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db *gorm.DB
 }
+
+type sqliteTaskModel struct {
+	TaskID    string `gorm:"column:task_id;primaryKey"`
+	CreatedAt string `gorm:"column:created_at;not null"`
+	UpdatedAt string `gorm:"column:updated_at;not null"`
+}
+
+func (sqliteTaskModel) TableName() string { return "tasks" }
+
+type sqliteTaskAliasModel struct {
+	AliasValue string `gorm:"column:alias_value;primaryKey"`
+	TaskID     string `gorm:"column:task_id;not null;index"`
+	AliasType  string `gorm:"column:alias_type;not null"`
+	Repo       string `gorm:"column:repo"`
+	Branch     string `gorm:"column:branch"`
+	PRNumber   *int   `gorm:"column:pr_number"`
+	CreatedAt  string `gorm:"column:created_at;not null"`
+	UpdatedAt  string `gorm:"column:updated_at;not null"`
+}
+
+func (sqliteTaskAliasModel) TableName() string { return "task_aliases" }
 
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create sqlite parent dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := gorm.Open(sqlitegorm.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite db: %w", err)
 	}
 
-	store, err := NewSQLiteStoreFromDB(db)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return store, nil
-}
-
-func NewSQLiteStoreFromDB(db *sql.DB) (*SQLiteStore, error) {
 	store := &SQLiteStore{db: db}
 	if err := store.migrate(context.Background()); err != nil {
 		return nil, err
@@ -44,7 +55,11 @@ func NewSQLiteStoreFromDB(db *sql.DB) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) Close() error {
-	return s.db.Close()
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return fmt.Errorf("get sql db handle: %w", err)
+	}
+	return sqlDB.Close()
 }
 
 func (s *SQLiteStore) migrate(ctx context.Context) error {
@@ -69,232 +84,96 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	}
 
 	for _, statement := range statements {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("migrate sqlite schema: %w", err)
+		if err := s.db.WithContext(ctx).Exec(statement).Error; err != nil {
+			return fmt.Errorf("run sqlite migration statement: %w", err)
 		}
 	}
-
 	return nil
 }
 
 func (s *SQLiteStore) CreateTask(ctx context.Context, task Task) error {
-	_, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO tasks(task_id, created_at, updated_at) VALUES (?, ?, ?)`,
-		task.ID,
-		formatTime(task.CreatedAt),
-		formatTime(task.UpdatedAt),
-	)
-	if err != nil {
+	model := sqliteTaskModel{
+		TaskID:    task.ID,
+		CreatedAt: formatTime(task.CreatedAt),
+		UpdatedAt: formatTime(task.UpdatedAt),
+	}
+	if err := s.db.WithContext(ctx).Create(&model).Error; err != nil {
 		return fmt.Errorf("insert task: %w", err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (Task, bool, error) {
-	row := s.db.QueryRowContext(
-		ctx,
-		`SELECT task_id, created_at, updated_at FROM tasks WHERE task_id = ?`,
-		taskID,
-	)
-
-	return scanTask(row)
-}
-
 func (s *SQLiteStore) GetTaskByAlias(ctx context.Context, aliasValue string) (Task, bool, error) {
-	row := s.db.QueryRowContext(
-		ctx,
-		`SELECT t.task_id, t.created_at, t.updated_at
-		 FROM tasks t
-		 JOIN task_aliases a ON a.task_id = t.task_id
-		 WHERE a.alias_value = ?`,
-		aliasValue,
-	)
+	var alias sqliteTaskAliasModel
+	if err := s.db.WithContext(ctx).Where("alias_value = ?", aliasValue).First(&alias).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Task{}, false, nil
+		}
+		return Task{}, false, fmt.Errorf("query task alias: %w", err)
+	}
 
-	return scanTask(row)
+	var task sqliteTaskModel
+	if err := s.db.WithContext(ctx).Where("task_id = ?", alias.TaskID).First(&task).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Task{}, false, ErrTaskNotFound
+		}
+		return Task{}, false, fmt.Errorf("query task by alias: %w", err)
+	}
+
+	return fromTaskModel(task), true, nil
 }
 
 func (s *SQLiteStore) GetAlias(ctx context.Context, aliasValue string) (TaskAlias, bool, error) {
-	row := s.db.QueryRowContext(
-		ctx,
-		`SELECT task_id, alias_type, alias_value, repo, branch, pr_number, created_at, updated_at
-		 FROM task_aliases
-		 WHERE alias_value = ?`,
-		aliasValue,
-	)
-
-	var (
-		alias          TaskAlias
-		aliasType      string
-		repo, branch   sql.NullString
-		prNumber       sql.NullInt64
-		createdAtRaw   string
-		updatedAtRaw   string
-	)
-
-	err := row.Scan(
-		&alias.TaskID,
-		&aliasType,
-		&alias.Value,
-		&repo,
-		&branch,
-		&prNumber,
-		&createdAtRaw,
-		&updatedAtRaw,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TaskAlias{}, false, nil
-	}
-	if err != nil {
+	var model sqliteTaskAliasModel
+	if err := s.db.WithContext(ctx).Where("alias_value = ?", aliasValue).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return TaskAlias{}, false, nil
+		}
 		return TaskAlias{}, false, fmt.Errorf("query alias: %w", err)
 	}
-
-	alias.Type = AliasType(aliasType)
-	alias.Repo = repo.String
-	alias.Branch = branch.String
-	if prNumber.Valid {
-		alias.PRNumber = int(prNumber.Int64)
-	}
-
-	createdAt, err := time.Parse(time.RFC3339Nano, createdAtRaw)
-	if err != nil {
-		return TaskAlias{}, false, fmt.Errorf("parse alias created_at: %w", err)
-	}
-	updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
-	if err != nil {
-		return TaskAlias{}, false, fmt.Errorf("parse alias updated_at: %w", err)
-	}
-	alias.CreatedAt = createdAt
-	alias.UpdatedAt = updatedAt
-
-	return alias, true, nil
+	return fromAliasModel(model), true, nil
 }
 
 func (s *SQLiteStore) UpsertAlias(ctx context.Context, alias TaskAlias) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("start alias upsert tx: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	var existingTaskID string
-	row := tx.QueryRowContext(
-		ctx,
-		`SELECT task_id FROM task_aliases WHERE alias_value = ?`,
-		alias.Value,
-	)
-	switch scanErr := row.Scan(&existingTaskID); {
-	case errors.Is(scanErr, sql.ErrNoRows):
-	case scanErr != nil:
-		return fmt.Errorf("read existing alias: %w", scanErr)
-	default:
-		if existingTaskID != alias.TaskID {
-			return ErrAliasAlreadyBound
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing sqliteTaskAliasModel
+		err := tx.Where("alias_value = ?", alias.Value).First(&existing).Error
+		if err == nil {
+			if existing.TaskID != alias.TaskID {
+				return ErrAliasAlreadyBound
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("read existing alias: %w", err)
 		}
-	}
 
-	var taskExists int
-	taskRow := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM tasks WHERE task_id = ?`, alias.TaskID)
-	if err := taskRow.Scan(&taskExists); err != nil {
-		return fmt.Errorf("verify task for alias: %w", err)
-	}
-	if taskExists == 0 {
-		return ErrTaskNotFound
-	}
+		var taskCount int64
+		if err := tx.Model(&sqliteTaskModel{}).Where("task_id = ?", alias.TaskID).Count(&taskCount).Error; err != nil {
+			return fmt.Errorf("verify task for alias: %w", err)
+		}
+		if taskCount == 0 {
+			return ErrTaskNotFound
+		}
 
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO task_aliases(alias_value, task_id, alias_type, repo, branch, pr_number, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(alias_value) DO UPDATE SET
-		   task_id = excluded.task_id,
-		   alias_type = excluded.alias_type,
-		   repo = excluded.repo,
-		   branch = excluded.branch,
-		   pr_number = excluded.pr_number,
-		   updated_at = excluded.updated_at`,
-		alias.Value,
-		alias.TaskID,
-		string(alias.Type),
-		nullIfEmpty(alias.Repo),
-		nullIfEmpty(alias.Branch),
-		nullIfZero(alias.PRNumber),
-		formatTime(alias.CreatedAt),
-		formatTime(alias.UpdatedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert alias: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit alias upsert tx: %w", err)
-	}
-	return nil
+		model := toAliasModel(alias)
+		if err := tx.Save(&model).Error; err != nil {
+			return fmt.Errorf("upsert alias: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *SQLiteStore) ListTaskAliasRows(ctx context.Context) ([]TaskAliasRow, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT a.task_id, a.alias_type, a.alias_value, a.repo, a.branch, a.pr_number, a.created_at, a.updated_at
-		 FROM task_aliases a
-		 ORDER BY a.updated_at DESC, a.alias_value ASC`,
-	)
-	if err != nil {
+	models := make([]sqliteTaskAliasModel, 0)
+	if err := s.db.WithContext(ctx).
+		Order("updated_at DESC").
+		Order("alias_value ASC").
+		Find(&models).Error; err != nil {
 		return nil, fmt.Errorf("query task alias rows: %w", err)
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
 
-	result := make([]TaskAliasRow, 0)
-	for rows.Next() {
-		var (
-			row                TaskAliasRow
-			aliasType          string
-			repo, branch       sql.NullString
-			prNumber           sql.NullInt64
-			createdAtRaw       string
-			updatedAtRaw       string
-		)
-
-		if err := rows.Scan(
-			&row.TaskID,
-			&aliasType,
-			&row.AliasValue,
-			&repo,
-			&branch,
-			&prNumber,
-			&createdAtRaw,
-			&updatedAtRaw,
-		); err != nil {
-			return nil, fmt.Errorf("scan task alias row: %w", err)
-		}
-
-		row.AliasType = AliasType(aliasType)
-		row.Repo = repo.String
-		row.Branch = branch.String
-		if prNumber.Valid {
-			row.PRNumber = int(prNumber.Int64)
-		}
-
-		createdAt, err := time.Parse(time.RFC3339Nano, createdAtRaw)
-		if err != nil {
-			return nil, fmt.Errorf("parse task alias created_at: %w", err)
-		}
-		updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
-		if err != nil {
-			return nil, fmt.Errorf("parse task alias updated_at: %w", err)
-		}
-		row.CreatedAt = createdAt
-		row.UpdatedAt = updatedAt
-
-		result = append(result, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate task alias rows: %w", err)
+	result := make([]TaskAliasRow, 0, len(models))
+	for _, model := range models {
+		result = append(result, fromAliasModelToRow(model))
 	}
 	return result, nil
 }
@@ -305,32 +184,26 @@ func (s *SQLiteStore) ListTaskAliasGroupCounts(ctx context.Context, groupBy stri
 		return nil, err
 	}
 
-	query := fmt.Sprintf(
-		`SELECT COALESCE(%s, ''), COUNT(1)
-		 FROM task_aliases
-		 GROUP BY 1
-		 ORDER BY COUNT(1) DESC, 1 ASC`,
-		column,
-	)
+	type groupResult struct {
+		Key   string `gorm:"column:key"`
+		Count int    `gorm:"column:count"`
+	}
 
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
+	raw := make([]groupResult, 0)
+	selectExpr := fmt.Sprintf("COALESCE(%s, '') as key, COUNT(1) as count", column)
+	if err := s.db.WithContext(ctx).
+		Model(&sqliteTaskAliasModel{}).
+		Select(selectExpr).
+		Group(column).
+		Order("count DESC").
+		Order("key ASC").
+		Scan(&raw).Error; err != nil {
 		return nil, fmt.Errorf("query task alias group counts: %w", err)
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
 
-	result := make([]GroupCount, 0)
-	for rows.Next() {
-		var entry GroupCount
-		if err := rows.Scan(&entry.Key, &entry.Count); err != nil {
-			return nil, fmt.Errorf("scan task alias group count: %w", err)
-		}
-		result = append(result, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate task alias group counts: %w", err)
+	result := make([]GroupCount, 0, len(raw))
+	for _, row := range raw {
+		result = append(result, GroupCount{Key: row.Key, Count: row.Count})
 	}
 	return result, nil
 }
@@ -346,50 +219,74 @@ func taskAliasGroupByColumn(groupBy string) (string, error) {
 	}
 }
 
-func scanTask(row *sql.Row) (Task, bool, error) {
-	var (
-		task      Task
-		createdAt string
-		updatedAt string
-	)
-
-	err := row.Scan(&task.ID, &createdAt, &updatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Task{}, false, nil
+func fromTaskModel(model sqliteTaskModel) Task {
+	createdAt, _ := parseTime(model.CreatedAt)
+	updatedAt, _ := parseTime(model.UpdatedAt)
+	return Task{
+		ID:        model.TaskID,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
-	if err != nil {
-		return Task{}, false, fmt.Errorf("scan task: %w", err)
-	}
-
-	parsedCreated, err := time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return Task{}, false, fmt.Errorf("parse task created_at: %w", err)
-	}
-	parsedUpdated, err := time.Parse(time.RFC3339Nano, updatedAt)
-	if err != nil {
-		return Task{}, false, fmt.Errorf("parse task updated_at: %w", err)
-	}
-
-	task.CreatedAt = parsedCreated
-	task.UpdatedAt = parsedUpdated
-
-	return task, true, nil
 }
 
-func formatTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+func toAliasModel(alias TaskAlias) sqliteTaskAliasModel {
+	var prNumber *int
+	if alias.PRNumber > 0 {
+		value := alias.PRNumber
+		prNumber = &value
+	}
+	return sqliteTaskAliasModel{
+		AliasValue: alias.Value,
+		TaskID:     alias.TaskID,
+		AliasType:  string(alias.Type),
+		Repo:       alias.Repo,
+		Branch:     alias.Branch,
+		PRNumber:   prNumber,
+		CreatedAt:  formatTime(alias.CreatedAt),
+		UpdatedAt:  formatTime(alias.UpdatedAt),
+	}
 }
 
-func nullIfEmpty(value string) any {
-	if value == "" {
-		return nil
+func fromAliasModel(model sqliteTaskAliasModel) TaskAlias {
+	createdAt, _ := parseTime(model.CreatedAt)
+	updatedAt, _ := parseTime(model.UpdatedAt)
+	result := TaskAlias{
+		TaskID:    model.TaskID,
+		Type:      AliasType(model.AliasType),
+		Value:     model.AliasValue,
+		Repo:      model.Repo,
+		Branch:    model.Branch,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
-	return value
+	if model.PRNumber != nil {
+		result.PRNumber = *model.PRNumber
+	}
+	return result
 }
 
-func nullIfZero(value int) any {
-	if value == 0 {
-		return nil
+func fromAliasModelToRow(model sqliteTaskAliasModel) TaskAliasRow {
+	createdAt, _ := parseTime(model.CreatedAt)
+	updatedAt, _ := parseTime(model.UpdatedAt)
+	row := TaskAliasRow{
+		TaskID:     model.TaskID,
+		AliasType:  AliasType(model.AliasType),
+		AliasValue: model.AliasValue,
+		Repo:       model.Repo,
+		Branch:     model.Branch,
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
 	}
-	return value
+	if model.PRNumber != nil {
+		row.PRNumber = *model.PRNumber
+	}
+	return row
+}
+
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseTime(value string) (time.Time, error) {
+	return time.Parse(time.RFC3339Nano, value)
 }
