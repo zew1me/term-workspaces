@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"term-workspaces/internal/tasks"
+	"term-workspaces/internal/ui"
 	"term-workspaces/internal/wezterm"
 	"time"
 )
@@ -33,9 +34,27 @@ func run(args []string) error {
 	switch args[0] {
 	case "task":
 		return runTask(args[1:])
+	case "ui":
+		return runUI(args[1:])
 	default:
 		return printUsage()
 	}
+}
+
+func runUI(args []string) error {
+	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	preview := fs.Bool("preview", false, "Print initial UI view and exit")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	model := ui.NewDummyModel()
+	if *preview {
+		fmt.Println(model.View())
+		return nil
+	}
+	return fmt.Errorf("interactive ui mode is not wired yet; run `ttt ui --preview`")
 }
 
 func runTask(args []string) error {
@@ -801,6 +820,7 @@ func resolveTaskForNote(ctx context.Context, service *tasks.Service, repo, branc
 
 func printUsage() error {
 	fmt.Println("ttt usage:")
+	fmt.Println("  ttt ui [--preview]")
 	fmt.Println("  ttt task ensure-prepr --repo owner/repo --branch feature/name [--db path]")
 	fmt.Println("  ttt task close-session --repo owner/repo [--branch feature/name] [--pr 123] [--db path]")
 	fmt.Println("  ttt task dashboard [--db path] [--json]")

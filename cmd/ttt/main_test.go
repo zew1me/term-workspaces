@@ -51,6 +51,21 @@ func TestRunTaskEnsurePrePRCreatedThenExisting(t *testing.T) {
 	}
 }
 
+func TestRunUIPreview(t *testing.T) {
+	out, err := captureStdout(func() error {
+		return run([]string{"ui", "--preview"})
+	})
+	if err != nil {
+		t.Fatalf("ui --preview failed: %v", err)
+	}
+	if !strings.Contains(out, "ttt UI (scaffold)") {
+		t.Fatalf("expected scaffold header in output: %q", out)
+	}
+	if !strings.Contains(out, "PR Queue") {
+		t.Fatalf("expected tabs in output: %q", out)
+	}
+}
+
 func TestRunTaskLinkPRReusesPrePRTaskID(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 
