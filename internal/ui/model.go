@@ -11,7 +11,13 @@ type Model struct {
 	sections  map[string][]string
 }
 
-func NewDummyModel() Model {
+type Sections struct {
+	PRQueue      []string
+	OpenSessions []string
+	Events       []string
+}
+
+func NewModelFromSections(input Sections) Model {
 	return Model{
 		tabs: []string{
 			"PR Queue",
@@ -20,22 +26,30 @@ func NewDummyModel() Model {
 		},
 		activeTab: 0,
 		sections: map[string][]string{
-			"PR Queue": {
-				"#211 owner/repo feature/ui-scaffold",
-				"#198 owner/repo fix/session-reconcile",
-				"#176 owner/repo docs/dashboard",
-			},
-			"Open Sessions": {
-				"task-owner-repo-211 pane=901 workspace=task-owner-repo-211",
-				"task-owner-repo-198 pane=902 workspace=task-owner-repo-198",
-			},
-			"Events": {
-				"[ok] loaded local cache",
-				"[ok] fetched task aliases",
-				"[ok] rendered dummy dashboard",
-			},
+			"PR Queue":      fallbackRows(input.PRQueue, "no task aliases found"),
+			"Open Sessions": fallbackRows(input.OpenSessions, "no open sessions"),
+			"Events":        fallbackRows(input.Events, "no events"),
 		},
 	}
+}
+
+func NewDummyModel() Model {
+	return NewModelFromSections(Sections{
+		PRQueue: []string{
+			"#211 owner/repo feature/ui-scaffold",
+			"#198 owner/repo fix/session-reconcile",
+			"#176 owner/repo docs/dashboard",
+		},
+		OpenSessions: []string{
+			"task-owner-repo-211 pane=901 workspace=task-owner-repo-211",
+			"task-owner-repo-198 pane=902 workspace=task-owner-repo-198",
+		},
+		Events: []string{
+			"[ok] loaded local cache",
+			"[ok] fetched task aliases",
+			"[ok] rendered dummy dashboard",
+		},
+	})
 }
 
 func (m Model) NextTab() Model {
@@ -63,7 +77,7 @@ func (m Model) SelectTab(index int) Model {
 
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString("ttt UI (scaffold)\n")
+	b.WriteString("ttt UI (preview)\n")
 	b.WriteString("keys: tab/shift+tab move | 1/2/3 jump | q quit\n\n")
 	if len(m.tabs) == 0 {
 		return b.String()
@@ -90,4 +104,11 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func fallbackRows(rows []string, fallback string) []string {
+	if len(rows) == 0 {
+		return []string{fallback}
+	}
+	return rows
 }
