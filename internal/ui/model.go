@@ -95,7 +95,14 @@ func (m Model) ActiveTabIndex() int {
 }
 
 func (m Model) ActiveTabName() string {
-	return m.tabs[m.activeTab]
+	if len(m.tabs) == 0 {
+		return ""
+	}
+	safeActiveTab := m.activeTab
+	if safeActiveTab < 0 || safeActiveTab >= len(m.tabs) {
+		safeActiveTab = 0
+	}
+	return m.tabs[safeActiveTab]
 }
 
 func (m Model) SelectedIndexForTab(tab string) int {
@@ -124,11 +131,17 @@ func (m Model) SetSelectedIndexForTab(tab string, index int) Model {
 
 func (m Model) MoveSelectionDown() Model {
 	tab := m.ActiveTabName()
+	if tab == "" {
+		return m
+	}
 	return m.SetSelectedIndexForTab(tab, m.SelectedIndexForTab(tab)+1)
 }
 
 func (m Model) MoveSelectionUp() Model {
 	tab := m.ActiveTabName()
+	if tab == "" {
+		return m
+	}
 	return m.SetSelectedIndexForTab(tab, m.SelectedIndexForTab(tab)-1)
 }
 
@@ -163,8 +176,7 @@ func (m Model) WithEvent(message string) Model {
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString("ttt UI (preview)\n")
-<<<<<<< HEAD
-	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, q\n\n")
+	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, j/k, o, q\n\n")
 	if len(m.tabs) == 0 {
 		return b.String()
 	}
@@ -174,9 +186,6 @@ func (m Model) View() string {
 		safeActiveTab = 0
 	}
 
-=======
-	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, j/k, o, q\n\n")
->>>>>>> 3e1c76f (wip(ui): checkpoint model selection primitives)
 	for i, tab := range m.tabs {
 		if i == safeActiveTab {
 			b.WriteString(fmt.Sprintf("[ %s ] ", tab))
@@ -186,12 +195,7 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n\n")
 
-<<<<<<< HEAD
 	active := m.tabs[safeActiveTab]
-	for _, row := range m.sections[active] {
-		b.WriteString("- ")
-=======
-	active := m.tabs[m.activeTab]
 	selected := m.SelectedIndexForTab(active)
 	for idx, row := range m.sections[active] {
 		prefix := "  "
@@ -199,7 +203,6 @@ func (m Model) View() string {
 			prefix = "> "
 		}
 		b.WriteString(prefix)
->>>>>>> 3e1c76f (wip(ui): checkpoint model selection primitives)
 		b.WriteString(row)
 		b.WriteString("\n")
 	}
