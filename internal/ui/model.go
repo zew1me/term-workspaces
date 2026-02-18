@@ -188,9 +188,9 @@ func (m Model) View() string {
 
 	for i, tab := range m.tabs {
 		if i == safeActiveTab {
-			b.WriteString(fmt.Sprintf("[ %s ] ", tab))
+			_, _ = fmt.Fprintf(&b, "[ %s ] ", tab)
 		} else {
-			b.WriteString(fmt.Sprintf("  %s   ", tab))
+			_, _ = fmt.Fprintf(&b, "  %s   ", tab)
 		}
 	}
 	b.WriteString("\n\n")

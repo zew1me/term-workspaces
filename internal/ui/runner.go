@@ -49,7 +49,7 @@ func RunInteractive(initial Model, in io.Reader, out io.Writer, refresh RefreshF
 		case "":
 			// No-op; rerender.
 		default:
-			if _, err := fmt.Fprintf(out, "unknown command: %s\n", command); err != nil {
+			if _, err := fmt.Fprintln(out, "unknown command"); err != nil {
 				return fmt.Errorf("write ui command error: %w", err)
 			}
 		}

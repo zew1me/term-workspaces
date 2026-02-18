@@ -709,7 +709,7 @@ func runTaskOpenNote(args []string) error {
 		return nil
 	}
 
-	// #nosec G204 -- editor command is intentionally user-configurable via $EDITOR.
+	// #nosec G204,G702 -- editor is constrained by ResolveEditorCommand allowlist and fixed fallback.
 	command := exec.Command(editorName, editorArgs...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
