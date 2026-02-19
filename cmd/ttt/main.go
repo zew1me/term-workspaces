@@ -45,10 +45,13 @@ func run(args []string) error {
 func runUI(args []string) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	preview := fs.Bool("preview", false, "Print initial UI view and exit")
+	preview := fs.Bool("preview", false, "Run interactive UI with mock data")
 	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *preview {
+		return runUIInteractive(ui.NewDummyModel(), os.Stdin, os.Stdout, nil)
 	}
 
 	store, err := tasks.NewSQLiteStore(*dbPath)
@@ -62,10 +65,6 @@ func runUI(args []string) error {
 	model, err := buildUIModelFromStore(context.Background(), store)
 	if err != nil {
 		return err
-	}
-	if *preview {
-		fmt.Println(model.View())
-		return nil
 	}
 	return runUIInteractive(model, os.Stdin, os.Stdout, func() (ui.Model, error) {
 		return buildUIModelFromStore(context.Background(), store)

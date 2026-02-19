@@ -54,24 +54,31 @@ func TestRunTaskEnsurePrePRCreatedThenExisting(t *testing.T) {
 
 func TestRunUIPreview(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
-	out, err := captureStdout(func() error {
-		return run([]string{"ui", "--preview", "--db", dbPath})
-	})
-	if err != nil {
+	called := false
+
+	original := runUIInteractive
+	runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer, refresh ui.RefreshFunc) error {
+		called = true
+		view := model.View()
+		if !strings.Contains(view, "#211 owner/repo feature/ui-scaffold") {
+			t.Fatalf("expected dummy preview data, got %q", view)
+		}
+		if refresh != nil {
+			t.Fatalf("expected no refresh callback in preview mode")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runUIInteractive = original })
+
+	if err := run([]string{"ui", "--preview", "--db", dbPath}); err != nil {
 		t.Fatalf("ui --preview failed: %v", err)
 	}
-	if !strings.Contains(out, "ttt UI (preview)") {
-		t.Fatalf("expected preview header in output: %q", out)
-	}
-	if !strings.Contains(out, "PR Queue") {
-		t.Fatalf("expected tabs in output: %q", out)
-	}
-	if !strings.Contains(out, "no task aliases found") {
-		t.Fatalf("expected empty-state queue in output: %q", out)
+	if !called {
+		t.Fatalf("expected interactive runner to be called in preview mode")
 	}
 }
 
-func TestRunUIPreviewUsesRealStoreData(t *testing.T) {
+func TestRunUIPreviewIgnoresRealStoreData(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	fake := &fakeWezTermClient{nextPaneID: 1200}
 
@@ -90,17 +97,29 @@ func TestRunUIPreviewUsesRealStoreData(t *testing.T) {
 		t.Fatalf("open-session run failed: %v", err)
 	}
 
-	out, err := captureStdout(func() error {
-		return run([]string{"ui", "--preview", "--db", dbPath})
-	})
-	if err != nil {
+	called := false
+	original := runUIInteractive
+	runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer, refresh ui.RefreshFunc) error {
+		called = true
+		view := model.View()
+		if strings.Contains(view, "prepr:zew1me/term-workspaces:feature/ui-real-data") {
+			t.Fatalf("did not expect live alias in preview output: %q", view)
+		}
+		if strings.Contains(view, "session=open(pane=1200)") {
+			t.Fatalf("did not expect live session in preview output: %q", view)
+		}
+		if !strings.Contains(view, "#211 owner/repo feature/ui-scaffold") {
+			t.Fatalf("expected dummy preview rows: %q", view)
+		}
+		return nil
+	}
+	t.Cleanup(func() { runUIInteractive = original })
+
+	if err := run([]string{"ui", "--preview", "--db", dbPath}); err != nil {
 		t.Fatalf("ui --preview failed: %v", err)
 	}
-	if !strings.Contains(out, "prepr:zew1me/term-workspaces:feature/ui-real-data") {
-		t.Fatalf("expected real alias in preview output: %q", out)
-	}
-	if !strings.Contains(out, "session=open(pane=1200)") {
-		t.Fatalf("expected open session status in preview output: %q", out)
+	if !called {
+		t.Fatalf("expected interactive runner to be called")
 	}
 }
 

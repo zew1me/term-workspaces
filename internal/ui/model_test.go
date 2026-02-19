@@ -82,3 +82,15 @@ func TestRunInteractiveRefreshesModelEachLoop(t *testing.T) {
 		t.Fatalf("expected refreshed rows in output: %q", text)
 	}
 }
+
+func TestRunInteractiveHandlesSelectionCommands(t *testing.T) {
+	input := strings.NewReader("j\nk\nq\n")
+	var output bytes.Buffer
+
+	if err := RunInteractive(NewDummyModel(), input, &output, nil); err != nil {
+		t.Fatalf("RunInteractive failed: %v", err)
+	}
+	if strings.Contains(output.String(), "unknown command") {
+		t.Fatalf("did not expect unknown command for j/k: %q", output.String())
+	}
+}

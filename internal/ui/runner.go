@@ -40,10 +40,14 @@ func RunInteractive(initial Model, in io.Reader, out io.Writer, refresh RefreshF
 		switch command {
 		case "q", "quit", "exit":
 			return nil
-		case "tab", "right", "l":
+		case "tab", "right", "l", "\x1b[c":
 			model = model.NextTab()
-		case "backtab", "left", "h":
+		case "backtab", "left", "h", "\x1b[d":
 			model = model.PrevTab()
+		case "j", "down", "\x1b[b":
+			model = model.MoveSelectionDown()
+		case "k", "up", "\x1b[a":
+			model = model.MoveSelectionUp()
 		case "1", "2", "3":
 			model = model.SelectTab(int(command[0] - '1'))
 		case "":

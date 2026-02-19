@@ -176,7 +176,7 @@ func (m Model) WithEvent(message string) Model {
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString("ttt UI (preview)\n")
-	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, j/k, o, q\n\n")
+	b.WriteString("commands: tab/backtab (or l/h), 1/2/3, j/k, q\n\n")
 	if len(m.tabs) == 0 {
 		return b.String()
 	}
