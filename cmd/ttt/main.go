@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,10 +45,13 @@ func run(args []string) error {
 func runUI(args []string) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	preview := fs.Bool("preview", false, "Print initial UI view and exit")
+	preview := fs.Bool("preview", false, "Run interactive UI with mock data")
 	dbPath := fs.String("db", defaultDBPath(), "Path to sqlite database")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *preview {
+		return runUIInteractive(ui.NewDummyModel(), os.Stdin, os.Stdout, nil)
 	}
 
 	store, err := tasks.NewSQLiteStore(*dbPath)
@@ -62,11 +66,13 @@ func runUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *preview {
-		fmt.Println(model.View())
-		return nil
-	}
-	return fmt.Errorf("interactive ui mode is not wired yet; run `ttt ui --preview`")
+	return runUIInteractive(model, os.Stdin, os.Stdout, func() (ui.Model, error) {
+		return buildUIModelFromStore(context.Background(), store)
+	})
+}
+
+var runUIInteractive = func(model ui.Model, in io.Reader, out io.Writer, refresh ui.RefreshFunc) error {
+	return ui.RunInteractive(model, in, out, refresh)
 }
 
 func buildUIModelFromStore(ctx context.Context, store *tasks.SQLiteStore) (ui.Model, error) {
@@ -702,7 +708,7 @@ func runTaskOpenNote(args []string) error {
 		return nil
 	}
 
-	// #nosec G204 -- editor command is intentionally user-configurable via $EDITOR.
+	// #nosec G204,G702 -- editor is constrained by ResolveEditorCommand allowlist and fixed fallback.
 	command := exec.Command(editorName, editorArgs...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout

@@ -1,0 +1,61 @@
+package ui
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"strings"
+)
+
+type RefreshFunc func() (Model, error)
+
+func RunInteractive(initial Model, in io.Reader, out io.Writer, refresh RefreshFunc) error {
+	model := initial
+	scanner := bufio.NewScanner(in)
+
+	for {
+		if refresh != nil {
+			refreshed, err := refresh()
+			if err != nil {
+				return fmt.Errorf("refresh ui model: %w", err)
+			}
+			refreshed = refreshed.SelectTab(model.ActiveTabIndex())
+			model = refreshed
+		}
+
+		if _, err := fmt.Fprint(out, model.View()); err != nil {
+			return fmt.Errorf("write ui view: %w", err)
+		}
+		if _, err := fmt.Fprint(out, "\ncommand> "); err != nil {
+			return fmt.Errorf("write ui prompt: %w", err)
+		}
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("read ui command: %w", err)
+			}
+			return nil
+		}
+
+		command := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		switch command {
+		case "q", "quit", "exit":
+			return nil
+		case "tab", "right", "l", "\x1b[c":
+			model = model.NextTab()
+		case "backtab", "left", "h", "\x1b[d":
+			model = model.PrevTab()
+		case "j", "down", "\x1b[b":
+			model = model.MoveSelectionDown()
+		case "k", "up", "\x1b[a":
+			model = model.MoveSelectionUp()
+		case "1", "2", "3":
+			model = model.SelectTab(int(command[0] - '1'))
+		case "":
+			// No-op; rerender.
+		default:
+			if _, err := fmt.Fprintln(out, "unknown command"); err != nil {
+				return fmt.Errorf("write ui command error: %w", err)
+			}
+		}
+	}
+}
